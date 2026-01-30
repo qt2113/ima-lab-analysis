@@ -1,6 +1,17 @@
 """
 IMA Lab 数据分析平台 - Streamlit主应用
 """
+import os
+import sys
+
+# 获取当前文件的绝对路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 获取项目根目录 (app 的上一级)
+root_dir = os.path.dirname(current_dir)
+
+# 如果根目录不在 sys.path 中，则添加进去
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
 import streamlit as st
 import pandas as pd
 from pathlib import Path
