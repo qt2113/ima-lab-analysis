@@ -1,0 +1,61 @@
+# ==================== Google API密钥（绝对不能上传）====================
+google_oauth_credentials.json
+service-account-key.json
+*.json
+!package.json
+!tsconfig.json
+
+# ==================== Streamlit配置 ====================
+.streamlit/secrets.toml
+
+# ==================== 数据文件 ====================
+*.db
+*.sqlite
+*.xlsx
+*.xls
+*.csv
+historical_raw_data.xlsx
+realtime_raw_log*.xlsx
+code_to_category_map.xlsx
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+.venv
+
+# ==================== IDE ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ==================== 日志 ====================
+*.log
+logs/
+
+# ==================== 环境变量 ====================
+.env
+.env.local
