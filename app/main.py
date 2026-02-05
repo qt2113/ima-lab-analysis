@@ -1,19 +1,9 @@
 """
-IMA Lab 数据分析平台 - Streamlit主应用
+IMA Lab 数据分析平台 - Streamlit主应用（带设置功能）
 """
-import os
-import sys
-
-# 获取当前文件的绝对路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# 获取项目根目录 (app 的上一级)
-root_dir = os.path.dirname(current_dir)
-
-# 如果根目录不在 sys.path 中，则添加进去
-if root_dir not in sys.path:
-    sys.path.append(root_dir)
 import streamlit as st
 import pandas as pd
+import json
 from pathlib import Path
 
 # 配置页面
@@ -23,6 +13,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 添加项目根目录到Python路径
+import sys
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 # 导入模块
 from config.settings import CATEGORIES
@@ -35,9 +30,162 @@ from analysis.strategies.topn_strategy import TopNAnalysis
 from analysis.strategies.duration_strategy import DurationAnalysis
 
 
-# ==================== 辅助函数 ====================
+# ==================== 配置管理 ====================
 
-@st.cache_data(ttl=300)  # 缓存5分钟
+SETTINGS_FILE = Path(".streamlit/user_settings.json")
+
+def load_user_settings():
+    """加载用户自定义设置"""
+    default_settings = {
+        "google_sheet_id": "16-ijuA0O8x1Ckt3oEKldxmglGanSYUxXkDXOZMrY0VE",
+        "target_sheets": ["Fall 2025", "Spring 2026"],
+        "service_account_email": "qt2113@imalab-2025.iam.gserviceaccount.com"
+    }
+    
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                saved_settings = json.load(f)
+                # 合并默认设置和保存的设置
+                default_settings.update(saved_settings)
+        except Exception as e:
+            st.error(f"加载设置失败: {e}")
+    
+    return default_settings
+
+def save_user_settings(settings):
+    """保存用户自定义设置"""
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"保存设置失败: {e}")
+        return False
+
+def extract_sheet_id(url_or_id):
+    """从URL或直接ID中提取Sheet ID"""
+    url_or_id = url_or_id.strip()
+    
+    # 如果是完整URL
+    if 'docs.google.com' in url_or_id:
+        import re
+        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url_or_id)
+        if match:
+            return match.group(1)
+    
+    # 如果直接是ID
+    return url_or_id
+
+
+# ==================== 设置对话框 ====================
+
+def show_settings_dialog():
+    """显示设置对话框"""
+    
+    # 使用session_state管理对话框状态
+    if 'show_settings' not in st.session_state:
+        st.session_state.show_settings = False
+    
+    # 侧边栏按钮
+    with st.sidebar:
+        st.markdown('---')
+        if st.button('⚙️ Google Sheets 设置', use_container_width=True):
+            st.session_state.show_settings = True
+    
+    # 对话框内容
+    if st.session_state.show_settings:
+        with st.sidebar:
+            st.markdown('---')
+            st.subheader('⚙️ Google Sheets 配置')
+            
+            # 加载当前设置
+            current_settings = load_user_settings()
+            
+            # Sheet URL/ID 输入
+            st.markdown("**1️⃣ Google Sheet 链接或 ID**")
+            new_sheet_input = st.text_input(
+                "输入完整URL或Sheet ID",
+                value=current_settings['google_sheet_id'],
+                help="粘贴Google Sheet的完整链接，或只输入Sheet ID",
+                key='sheet_id_input'
+            )
+            
+            # 显示提取的ID
+            extracted_id = extract_sheet_id(new_sheet_input)
+            if extracted_id != new_sheet_input:
+                st.info(f"📋 提取的Sheet ID: `{extracted_id}`")
+            
+            # Target Sheets 输入
+            st.markdown("**2️⃣ 要拉取的工作表名称**")
+            st.caption("多个工作表用逗号分隔，例如：Fall 2025, Spring 2026")
+            
+            sheets_str = st.text_input(
+                "工作表名称",
+                value=", ".join(current_settings['target_sheets']),
+                help="输入要拉取数据的工作表名称，多个用逗号分隔",
+                key='sheets_input'
+            )
+            
+            # 解析输入的工作表名称
+            new_target_sheets = [s.strip() for s in sheets_str.split(',') if s.strip()]
+            
+            # 显示Service Account邮箱
+            st.markdown("**3️⃣ 授权访问（重要！）**")
+            st.warning(
+                f"⚠️ 请将以下邮箱添加到你的Google Sheet共享列表中：\n\n"
+                f"`{current_settings['service_account_email']}`"
+            )
+            
+            # 一键复制邮箱
+            if st.button('📋 复制Service Account邮箱', use_container_width=True):
+                st.code(current_settings['service_account_email'], language='text')
+                st.success("✅ 已显示邮箱，请手动复制")
+            
+            # 授权步骤说明
+            with st.expander('📖 如何授权？'):
+                st.markdown("""
+                1. 打开你的Google Sheet
+                2. 点击右上角 **"分享"** 按钮
+                3. 将上面的邮箱地址粘贴到输入框
+                4. 权限选择 **"查看者"** 或 **"编辑者"**
+                5. 取消勾选 "通知用户"
+                6. 点击 **"发送"**
+                7. 返回这里点击 **"保存设置"**
+                """)
+            
+            # 操作按钮
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button('💾 保存设置', use_container_width=True, type='primary'):
+                    # 保存新设置
+                    new_settings = {
+                        'google_sheet_id': extracted_id,
+                        'target_sheets': new_target_sheets,
+                        'service_account_email': current_settings['service_account_email']
+                    }
+                    
+                    if save_user_settings(new_settings):
+                        st.success('✅ 设置已保存！')
+                        st.info('💡 请点击"刷新数据"按钮以使用新的Sheet')
+                        # 清除缓存
+                        st.cache_data.clear()
+                        st.session_state.show_settings = False
+                        st.rerun()
+            
+            with col2:
+                if st.button('❌ 取消', use_container_width=True):
+                    st.session_state.show_settings = False
+                    st.rerun()
+            
+            st.markdown('---')
+
+
+# ==================== 数据加载函数 ====================
+
+@st.cache_data(ttl=300)
 def get_available_items(category: str, mode: str = 'all') -> list:
     """获取指定类别的所有物品（带编号）"""
     source = None if mode == 'all' else mode
@@ -61,42 +209,63 @@ def fuzzy_search_items(category: str, query: str, mode: str = 'all') -> list:
     query_lower = query.lower()
     matches = [item for item in all_items if query_lower in item.lower()]
     
-    # 排序：优先匹配开头的
     return sorted(matches, key=lambda x: (not x.lower().startswith(query_lower), x))
 
 
 def refresh_data(mode: str):
-    """刷新数据"""
+    """刷新数据 - 使用用户自定义设置"""
+    settings = load_user_settings()
+    
     with st.spinner('正在更新数据...'):
         try:
+            # 临时修改配置
+            import config.settings as config_module
+            original_sheet_id = config_module.GOOGLE_SHEET_ID
+            original_sheets = config_module.TARGET_SHEETS
+            
+            config_module.GOOGLE_SHEET_ID = settings['google_sheet_id']
+            config_module.TARGET_SHEETS = settings['target_sheets']
+            
             if mode == 'all':
                 # 加载历史数据
                 df_hist = load_historical_data()
                 db.insert_data(df_hist, source='historical', replace=True)
                 
                 # 加载实时数据
-                df_real = load_realtime_data()
+                df_real = load_realtime_data(sheet_names=settings['target_sheets'])
                 db.insert_data(df_real, source='realtime', replace=True)
                 
                 st.success(f'✅ 数据更新成功！历史: {len(df_hist)} 条，实时: {len(df_real)} 条')
             else:
                 # 只加载实时数据
-                df_real = load_realtime_data()
+                df_real = load_realtime_data(sheet_names=settings['target_sheets'])
                 db.insert_data(df_real, source='realtime', replace=True)
                 
                 st.success(f'✅ 实时数据更新成功！共 {len(df_real)} 条记录')
+            
+            # 恢复原配置
+            config_module.GOOGLE_SHEET_ID = original_sheet_id
+            config_module.TARGET_SHEETS = original_sheets
             
             # 清除缓存
             st.cache_data.clear()
             
         except Exception as e:
             st.error(f'❌ 数据更新失败: {str(e)}')
+            st.info('💡 请检查：\n1. Sheet ID是否正确\n2. Service Account是否已授权\n3. 工作表名称是否存在')
 
 
 # ==================== 侧边栏配置 ====================
 
 with st.sidebar:
     st.title('🔬 IMA Lab')
+    
+    # 显示当前配置
+    current_settings = load_user_settings()
+    with st.expander('📊 当前配置', expanded=False):
+        st.caption(f"Sheet ID: `{current_settings['google_sheet_id'][:20]}...`")
+        st.caption(f"工作表: {', '.join(current_settings['target_sheets'])}")
+    
     st.markdown('---')
     
     # 数据模式选择
@@ -108,7 +277,6 @@ with st.sidebar:
         key='data_mode'
     )
     
-    # 显示数据统计
     if mode == 'all':
         st.info('包含历史数据 + 实时数据')
     else:
@@ -117,6 +285,9 @@ with st.sidebar:
     # 刷新按钮
     if st.button('🔄 刷新数据', use_container_width=True):
         refresh_data(mode)
+    
+    # 设置对话框
+    show_settings_dialog()
     
     st.markdown('---')
     
