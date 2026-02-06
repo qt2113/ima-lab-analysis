@@ -247,8 +247,6 @@ def refresh_data(mode: str):
                 st.success(f'✅ 实时数据更新成功！共 {len(df_real)} 条记录')
             
             # 恢复原配置
-            config_module.GOOGLE_SHEET_ID = original_sheet_id
-            config_module.TARGET_SHEETS = original_sheets
             
             # 清除缓存
             st.cache_data.clear()
@@ -256,6 +254,10 @@ def refresh_data(mode: str):
         except Exception as e:
             st.error(f'❌ 数据更新失败: {str(e)}')
             st.info('💡 请检查：\n1. Sheet ID是否正确\n2. Service Account是否已授权\n3. 工作表名称是否存在')
+        finally:
+            # ????????
+            config_module.GOOGLE_SHEET_ID = original_sheet_id
+            config_module.TARGET_SHEETS = original_sheets
 
 
 # ==================== 侧边栏配置 ====================
@@ -412,6 +414,13 @@ with tab2:
             key='topn_period'
         )
     
+    metric_tn = st.selectbox(
+        'Sort Metric',
+        options=['Count', 'Total Duration', 'Avg Duration'],
+        index=0,
+        key='topn_metric'
+    )
+    
     # 可选：限定物品名称
     col4, col5 = st.columns([1, 1])
     with col4:
@@ -445,6 +454,7 @@ with tab2:
                 mode=mode,
                 top_n=top_n,
                 period=period_tn,
+                metric=metric_tn,
                 item_name=item_name_tn if item_name_tn else None,
                 start_date=start_date_tn if start_date_tn else None,
                 end_date=end_date_tn if end_date_tn else None

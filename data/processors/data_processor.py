@@ -50,10 +50,11 @@ class DataProcessor:
                     if not mask_nat.any():
                         break
             
-            # 3. 最终回退：自动推断格式
+            # 3. ????????????pandas>=2.0?
             if mask_nat.any():
                 df.loc[mask_nat, col] = pd.to_datetime(
                     series.loc[mask_nat],
+                    format='mixed',
                     errors='coerce'
                 )
         
