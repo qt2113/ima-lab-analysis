@@ -14,7 +14,7 @@ class SingleItemAnalysis(AnalysisStrategy):
     def analyze(
         self,
         item_with_num: str,
-        category: str,
+        category: Optional[str],
         mode: str = 'all',
         start_date: Optional[str] = None,
         end_date: Optional[str] = None

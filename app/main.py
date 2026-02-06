@@ -191,6 +191,9 @@ def get_available_items(category: str, mode: str = 'all') -> list:
     source = None if mode == 'all' else mode
     exclude_inventory = (mode == 'realtime')
     
+    if category == 'All':
+        category = None
+    
     df = db.query(source=source, category=category, exclude_inventory=exclude_inventory)
     
     if df.empty:
@@ -321,7 +324,8 @@ with tab1:
     with col1:
         category_si = st.selectbox(
             '类别',
-            options=CATEGORIES,
+            options=['All'] + CATEGORIES,
+            index=0,
             key='single_item_category'
         )
     
@@ -360,7 +364,7 @@ with tab1:
                 analyzer = SingleItemAnalysis()
                 result = analyzer.analyze(
                     item_with_num=item_si,
-                    category=category_si,
+                    category=None if category_si == 'All' else category_si,
                     mode=mode,
                     start_date=start_date_si if start_date_si else None,
                     end_date=end_date_si if end_date_si else None
@@ -392,7 +396,8 @@ with tab2:
     with col1:
         category_tn = st.selectbox(
             '类别',
-            options=CATEGORIES,
+            options=['All'] + CATEGORIES,
+            index=0,
             key='topn_category'
         )
     
@@ -418,7 +423,7 @@ with tab2:
     
     with col5:
         if search_query_tn:
-            df_temp = db.query(category=category_tn)
+            df_temp = db.query(category=None if category_tn == 'All' else category_tn)
             item_names = DataProcessor.fuzzy_search(df_temp, search_query_tn, 'item name')
             item_name_tn = st.selectbox('物品名称', options=[''] + item_names, key='topn_item_name')
         else:
@@ -436,7 +441,7 @@ with tab2:
         with st.spinner('正在分析...'):
             analyzer = TopNAnalysis()
             result = analyzer.analyze(
-                category=category_tn,
+                category=None if category_tn == 'All' else category_tn,
                 mode=mode,
                 top_n=top_n,
                 period=period_tn,
@@ -469,7 +474,8 @@ with tab3:
     with col1:
         category_dur = st.selectbox(
             '类别',
-            options=CATEGORIES,
+            options=['All'] + CATEGORIES,
+            index=0,
             key='duration_category'
         )
     
@@ -508,7 +514,7 @@ with tab3:
                 analyzer = DurationAnalysis()
                 result = analyzer.analyze(
                     item_with_num=item_dur,
-                    category=category_dur,
+                    category=None if category_dur == 'All' else category_dur,
                     mode=mode,
                     start_date=start_date_dur if start_date_dur else None,
                     end_date=end_date_dur if end_date_dur else None

@@ -14,7 +14,7 @@ class TopNAnalysis(AnalysisStrategy):
     
     def analyze(
         self,
-        category: str,
+        category: Optional[str],
         mode: str = 'all',
         top_n: int = 5,
         period: str = 'Week',
@@ -67,13 +67,15 @@ class TopNAnalysis(AnalysisStrategy):
         # 确保Top N顺序
         pivot = pivot[top_items.intersection(pivot.columns)]
         
+        category_label = category if category else 'All Categories'
+
         return {
             'success': True,
             'pivot': pivot,
             'detail_data': df_top,
             'top_n': top_n,
             'period': period,
-            'category': category
+            'category': category_label
         }
     
     def _create_time_series(
@@ -130,7 +132,7 @@ class TopNAnalysis(AnalysisStrategy):
     def _create_timeline_chart(
         self,
         pivot: pd.DataFrame,
-        category: str,
+        category: Optional[str],
         top_n: int
     ) -> go.Figure:
         """创建时间线图表"""
