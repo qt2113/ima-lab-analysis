@@ -6,7 +6,8 @@ service-account-key.json
 !tsconfig.json
 
 # ==================== Streamlit配置 ====================
-.streamlit/secrets.toml
+.streamlit/
+!.streamlit/secrets.toml.example
 
 # ==================== 数据文件 ====================
 *.db
@@ -59,3 +60,76 @@ logs/
 # ==================== 环境变量 ====================
 .env
 .env.local
+
+# ==================== 系统文件夹 ====================
+AppData/
+Desktop/
+Documents/
+Downloads/
+Favorites/
+Links/
+Music/
+Pictures/
+Saved Games/
+Searches/
+Videos/
+OneDrive/
+WPS Cloud Files/
+WPSDrive/
+Zotero/
+.anaconda/
+.arduinoIDE/
+.bun/
+.cache/
+.conda/
+.config/
+.copilot/
+.docker/
+.idlerc/
+.ipython/
+.jupyter/
+.local/
+.matplotlib/
+.ollama/
+.openjfx/
+.ros/
+.ssh/
+.stm32cubemx/
+.stmcube/
+.stmcufinder/
+.thumbnails/
+anaconda3/
+PyCharm Community Edition 2024.2.1/
+PycharmProjects/
+STM32Cube/
+STMicroelectronics/
+crawler_exercise/
+my_docker_project/
+openvino_notebooks/
+rm_vision-main/
+
+# ==================== 临时文件 ====================
+*.jpg
+*.png
+*.log
+bmi_out.txt
+mail_time_tq.txt
+mail_time_tq_body.txt
+ntuser*
+nul
+bilibili_fav_watch_log.csv
+calendar_data.csv
+data.csv
+「开始」菜单
+.arduino-create/
+.bash_history
+.cisco/
+.codex/
+.condarc
+.continuum/
+.gitconfig
+.lesshst
+.node_repl_history
+CicoeNote/
+Contacts/
+OpenCode/
