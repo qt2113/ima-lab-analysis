@@ -145,10 +145,12 @@ class DatabaseManager:
             params.append(category)
         
         if start_date:
+            start_date = pd.to_datetime(start_date, errors='coerce').strftime('%Y-%m-%d')
             conditions.append("Start >= ?")
             params.append(start_date)
         
         if end_date:
+            end_date = pd.to_datetime(end_date, errors='coerce').strftime('%Y-%m-%d')
             conditions.append("Start <= ?")
             params.append(end_date)
         

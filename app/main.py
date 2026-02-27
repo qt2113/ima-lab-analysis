@@ -202,6 +202,29 @@ def get_available_items(category: str, mode: str = 'all') -> list:
     return sorted(df['item name(with num)'].dropna().unique().tolist())
 
 
+@st.cache_data(ttl=300)
+def get_date_range(mode: str = 'all') -> tuple:
+    """获取数据的日期范围（最早和最晚日期）"""
+    source = None if mode == 'all' else mode
+    exclude_inventory = (mode == 'realtime')
+    
+    df = db.query(source=source, exclude_inventory=exclude_inventory)
+    
+    if df.empty or 'Start' not in df.columns:
+        return None, None
+    
+    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
+    df = df.dropna(subset=['Start'])
+    
+    if df.empty:
+        return None, None
+    
+    min_date = df['Start'].min().strftime('%Y-%m-%d')
+    max_date = df['Start'].max().strftime('%Y-%m-%d')
+    
+    return min_date, max_date
+
+
 def fuzzy_search_items(category: str, query: str, mode: str = 'all') -> list:
     """模糊搜索物品"""
     all_items = get_available_items(category, mode)
@@ -376,11 +399,12 @@ with tab1:
     )
     
     # 时间范围
+    min_date, max_date = get_date_range(mode)
     col3, col4 = st.columns(2)
     with col3:
-        start_date_si = st.text_input('开始日期', placeholder='2025/1/1', key='si_start')
+        start_date_si = st.text_input('开始日期', value=min_date or '', key='si_start')
     with col4:
-        end_date_si = st.text_input('结束日期', placeholder='2025/12/31', key='si_end')
+        end_date_si = st.text_input('结束日期', value=max_date or '', key='si_end')
     
     # 运行分析
     if st.button('🚀 运行分析', key='run_single_item', use_container_width=True):
@@ -464,11 +488,12 @@ with tab2:
             item_name_tn = None
     
     # 时间范围
+    min_date, max_date = get_date_range(mode)
     col6, col7 = st.columns(2)
     with col6:
-        start_date_tn = st.text_input('开始日期', placeholder='2025/1/1', key='tn_start')
+        start_date_tn = st.text_input('开始日期', value=min_date or '', key='tn_start')
     with col7:
-        end_date_tn = st.text_input('结束日期', placeholder='2025/12/31', key='tn_end')
+        end_date_tn = st.text_input('结束日期', value=max_date or '', key='tn_end')
     
     # 运行分析
     if st.button('🚀 运行分析', key='run_topn', use_container_width=True):
@@ -534,11 +559,12 @@ with tab3:
     )
     
     # 时间范围
+    min_date, max_date = get_date_range(mode)
     col3, col4 = st.columns(2)
     with col3:
-        start_date_dur = st.text_input('开始日期', placeholder='2025/1/1', key='dur_start')
+        start_date_dur = st.text_input('开始日期', value=min_date or '', key='dur_start')
     with col4:
-        end_date_dur = st.text_input('结束日期', placeholder='2025/12/31', key='dur_end')
+        end_date_dur = st.text_input('结束日期', value=max_date or '', key='dur_end')
     
     # 运行分析
     if st.button('🚀 运行分析', key='run_duration', use_container_width=True):
