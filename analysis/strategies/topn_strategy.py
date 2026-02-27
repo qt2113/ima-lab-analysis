@@ -103,7 +103,18 @@ class TopNAnalysis(AnalysisStrategy):
         pivot = pivot[top_items.intersection(pivot.columns)]
 
         category_label = category if category else 'All Categories'
-
+        
+        # 确定日期范围：优先使用用户输入，否则使用数据实际范围
+        if start_date:
+            range_start = pd.to_datetime(start_date)
+        else:
+            range_start = df['Start'].min()
+        
+        if end_date:
+            range_end = pd.to_datetime(end_date)
+        else:
+            range_end = df['Start'].max()
+        
         return {
             'success': True,
             'pivot': pivot,
@@ -111,7 +122,11 @@ class TopNAnalysis(AnalysisStrategy):
             'top_n': top_n,
             'period': period,
             'metric': metric,
-            'category': category_label
+            'category': category_label,
+            'date_range': {
+                'start': range_start,
+                'end': range_end
+            }
         }
 
     def _create_time_series(self, df: pd.DataFrame, period: str) -> pd.DataFrame:

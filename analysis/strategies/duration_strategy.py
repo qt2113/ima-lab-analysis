@@ -53,14 +53,25 @@ class DurationAnalysis(AnalysisStrategy):
         # 构建日粒度时间线
         timeline = self._build_daily_timeline(df_item)
         
+        # 确定日期范围：优先使用用户输入，否则使用数据实际范围
+        if start_date:
+            range_start = pd.to_datetime(start_date)
+        else:
+            range_start = timeline['date'].min()
+        
+        if end_date:
+            range_end = pd.to_datetime(end_date)
+        else:
+            range_end = timeline['date'].max()
+        
         return {
             'success': True,
             'item_name': item_with_num,
             'timeline': timeline,
             'total_borrows': len(df_item),
             'date_range': {
-                'start': timeline['date'].min(),
-                'end': timeline['date'].max()
+                'start': range_start,
+                'end': range_end
             }
         }
     

@@ -53,14 +53,25 @@ class SingleItemAnalysis(AnalysisStrategy):
         # 构建时间线（使用事件模型）
         timeline = self._build_timeline(df_item)
         
+        # 确定日期范围：优先使用用户输入，否则使用数据实际范围
+        if start_date:
+            range_start = pd.to_datetime(start_date)
+        else:
+            range_start = df_item['Start'].min()
+        
+        if end_date:
+            range_end = pd.to_datetime(end_date)
+        else:
+            range_end = df_item['finished'].max()
+        
         return {
             'success': True,
             'item_name': item_with_num,
             'timeline': timeline,
             'total_borrows': len(df_item),
             'date_range': {
-                'start': df_item['Start'].min(),
-                'end': df_item['finished'].max()
+                'start': range_start,
+                'end': range_end
             }
         }
     
