@@ -16,7 +16,7 @@ TARGET_SHEETS = ["Fall 2025", "Spring 2026"]  # 要抓取的Sheet名称
 
 # ==================== 数据文件配置 ====================
 # 这些文件路径可以通过环境变量覆盖
-HISTORICAL_DATA_FILE = os.getenv("HISTORICAL_DATA_FILE", "historical_raw_data.xlsx")
+HISTORICAL_DATA_FILES = os.getenv("HISTORICAL_DATA_FILE", "historical_raw_data.xlsx,checkouts-2026-01-30.xlsx,2025 checkouts-2026-02-09.xlsx").split(",")
 CODE_CATEGORY_MAP_FILE = os.getenv("CODE_MAP_FILE", "code_to_category_map.xlsx")
 
 # ==================== 数据库配置 ====================
