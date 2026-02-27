@@ -236,6 +236,31 @@ def refresh_data(mode: str):
                 
                 # 加载实时数据
                 df_real = load_realtime_data(sheet_names=settings['target_sheets'])
+                
+                # 历史数据 vs 实时数据去重（以历史为准）
+                if not df_hist.empty and not df_real.empty:
+                    df_hist['Start'] = pd.to_datetime(df_hist['Start'], errors='coerce')
+                    df_real['Start'] = pd.to_datetime(df_real['Start'], errors='coerce')
+                    
+                    # 秒级精确匹配（保留备用）
+                    # hist_keys = set(zip(df_hist['Start'], df_hist['item name(with num)']))
+                    
+                    # 分钟级匹配（去除毫秒后匹配，误差1分钟内算同一条）
+                    df_hist['Start_min'] = df_hist['Start'].dt.floor('min')
+                    df_real['Start_min'] = df_real['Start'].dt.floor('min')
+                    hist_keys = set(zip(df_hist['Start_min'], df_hist['item name(with num)']))
+                    
+                    original_count = len(df_real)
+                    df_real = df_real[
+                        ~df_real.apply(lambda x: (x['Start_min'], x['item name(with num)']) in hist_keys, axis=1)
+                    ]
+                    removed_count = original_count - len(df_real)
+                    if removed_count > 0:
+                        st.info(f'🗑️  去除 {removed_count} 条与历史重复的实时数据')
+                    
+                    # 去除临时列，避免插入数据库时报错
+                    df_real = df_real.drop(columns=['Start_min'], errors='ignore')
+                
                 db.insert_data(df_real, source='realtime', replace=True)
                 
                 st.success(f'✅ 数据更新成功！历史: {len(df_hist)} 条，实时: {len(df_real)} 条')

@@ -18,7 +18,7 @@ class HistoricalDataLoader:
         'finished': 'finished',
         'duration (hours)': 'duration (hours)',
         'item category': 'Category',
-        'item name': 'item name(with num)'
+        'name': 'item name(with num)'
     }
     
     @staticmethod
@@ -80,7 +80,8 @@ class HistoricalDataLoader:
             raise FileNotFoundError("❌ 没有找到任何历史数据文件")
         
         result_df = pd.concat(all_dfs, ignore_index=True)
-        print(f"✅ 共加载 {len(result_df)} 条历史记录")
+        result_df = result_df.drop_duplicates(subset=['Start', 'item name(with num)'], keep='first')
+        print(f"✅ 共加载 {len(result_df)} 条历史记录（去重后）")
         
         return result_df
 

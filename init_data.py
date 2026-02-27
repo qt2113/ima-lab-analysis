@@ -3,6 +3,7 @@
 数据初始化脚本 - 首次运行时加载数据到数据库
 """
 import sys
+import pandas as pd
 from pathlib import Path
 
 # 添加项目根目录到Python路径
@@ -28,6 +29,7 @@ def init_database():
         print(f"✅ 历史数据加载成功：{len(df_historical)} 条记录")
     except FileNotFoundError as e:
         print(f"⚠️ 历史数据文件未找到，跳过: {e}")
+        df_historical = None
     except Exception as e:
         print(f"❌ 历史数据加载失败: {e}")
         return False
@@ -37,6 +39,30 @@ def init_database():
     try:
         df_realtime = load_realtime_data()
         if not df_realtime.empty:
+            # 历史数据 vs 实时数据去重（以历史为准）
+            if df_historical is not None and not df_historical.empty:
+                df_historical['Start'] = pd.to_datetime(df_historical['Start'], errors='coerce')
+                df_realtime['Start'] = pd.to_datetime(df_realtime['Start'], errors='coerce')
+                
+                # 秒级精确匹配（保留备用）
+                # hist_keys = set(zip(df_historical['Start'], df_historical['item name(with num)']))
+                
+                # 分钟级匹配（去除毫秒后匹配，误差1分钟内算同一条）
+                df_historical['Start_min'] = df_historical['Start'].dt.floor('min')
+                df_realtime['Start_min'] = df_realtime['Start'].dt.floor('min')
+                hist_keys = set(zip(df_historical['Start_min'], df_historical['item name(with num)']))
+                
+                original_count = len(df_realtime)
+                df_realtime = df_realtime[
+                    ~df_realtime.apply(lambda x: (x['Start_min'], x['item name(with num)']) in hist_keys, axis=1)
+                ]
+                removed_count = original_count - len(df_realtime)
+                if removed_count > 0:
+                    print(f"🗑️  去除 {removed_count} 条与历史重复的实时数据")
+                
+                # 去除临时列，避免插入数据库时报错
+                df_realtime = df_realtime.drop(columns=['Start_min'], errors='ignore')
+            
             db.insert_data(df_realtime, source='realtime', replace=True)
             print(f"✅ 实时数据加载成功：{len(df_realtime)} 条记录")
         else:
