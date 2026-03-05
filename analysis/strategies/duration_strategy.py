@@ -1,16 +1,18 @@
 """
-Duration分析策略 - 分析单个物品的完整借用时间线（日粒度）
+时间线分析策略 - 日历热力图展示使用强度
 """
 import pandas as pd
+import numpy as np
+import plotly.express as px
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 from typing import Optional
 
 from analysis.strategies.base_strategy import AnalysisStrategy
 
 
 class DurationAnalysis(AnalysisStrategy):
-    """物品借用时间线分析（日粒度状态）"""
-    
+
     def analyze(
         self,
         item_with_num: str,
@@ -19,159 +21,158 @@ class DurationAnalysis(AnalysisStrategy):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> dict:
-        """
-        分析单个物品的日粒度借用状态
-        
-        Args:
-            item_with_num: 物品名称（带编号）
-            category: 物品类别
-            mode: 数据模式
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            分析结果
-        """
-        # 加载数据
-        df = self.load_data(
-            mode=mode,
-            category=category,
-            start_date=start_date,
-            end_date=end_date
-        )
-        
-        # 筛选指定物品
+        df = self.load_data(mode=mode, category=category,
+                            start_date=start_date, end_date=end_date)
+
         df_item = df[df['item name(with num)'] == item_with_num].copy()
-        
         if df_item.empty:
-            return {
-                'success': False,
-                'message': f'未找到物品 "{item_with_num}" 的借用记录',
-                'timeline': pd.DataFrame()
-            }
-        
-        # 构建日粒度时间线
-        timeline = self._build_daily_timeline(df_item)
-        
-        # 确定日期范围：优先使用用户输入，否则使用数据实际范围
-        if start_date:
-            range_start = pd.to_datetime(start_date)
-        else:
-            range_start = timeline['date'].min()
-        
-        if end_date:
-            range_end = pd.to_datetime(end_date)
-        else:
-            range_end = timeline['date'].max()
-        
+            return {'success': False,
+                    'message': f'未找到物品 "{item_with_num}" 的借用记录'}
+
+        df_item = df_item.sort_values('Start').reset_index(drop=True)
+        now = pd.Timestamp.now()
+        df_item['_end'] = df_item['finished'].fillna(now)
+
+        # 构建日粒度数据：每天借出了多少小时
+        range_start = pd.to_datetime(start_date) if start_date else df_item['Start'].min().normalize()
+        range_end = pd.to_datetime(end_date) if end_date else now.normalize()
+
+        daily = self._build_daily_hours(df_item, range_start, range_end)
+
+        total_days = len(daily)
+        borrowed_days = (daily['hours'] > 0).sum()
+        total_borrow_hours = daily['hours'].sum()
+
         return {
             'success': True,
             'item_name': item_with_num,
-            'timeline': timeline,
+            'df': df_item,
+            'daily': daily,
             'total_borrows': len(df_item),
-            'date_range': {
-                'start': range_start,
-                'end': range_end
-            }
+            'borrowed_days': int(borrowed_days),
+            'total_days': total_days,
+            'total_borrow_hours': float(total_borrow_hours),
+            'utilization': borrowed_days / total_days if total_days > 0 else 0,
+            'date_range': {'start': range_start, 'end': range_end}
         }
-    
-    def _build_daily_timeline(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        构建日粒度借用状态时间线
-        
-        Args:
-            df: 物品的借用记录
-            
-        Returns:
-            时间线DataFrame (date, status)
-        """
-        # 填充未归还记录的finished时间
-        df['finished'] = df['finished'].fillna(pd.Timestamp.now())
-        
-        # 创建事件序列
-        events = pd.DataFrame({
-            'time': pd.concat([df['Start'], df['finished']]),
-            'delta': [1] * len(df) + [-1] * len(df)
-        }).sort_values('time').reset_index(drop=True)
-        
-        # 确定日期范围
-        start_day = events['time'].min().normalize()
-        end_day = events['time'].max().normalize()
-        
-        # 创建日期序列
-        date_range = pd.date_range(start_day, end_day, freq='D')
-        timeline = pd.DataFrame({'date': date_range})
-        
-        # 计算每一天的状态
-        def get_status_on_day(day):
-            """计算指定日期的借用状态（0或1）"""
-            cutoff = day + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-            cumsum = events.loc[events['time'] <= cutoff, 'delta'].sum()
-            return int(cumsum > 0)
-        
-        timeline['status'] = timeline['date'].apply(get_status_on_day)
-        
-        return timeline
-    
-    def visualize(self, analysis_result: dict) -> go.Figure:
-        """
-        可视化日粒度借用时间线
-        
-        Args:
-            analysis_result: 分析结果
-            
-        Returns:
-            Plotly图表对象
-        """
-        if not analysis_result['success']:
+
+    def _build_daily_hours(self, df: pd.DataFrame,
+                            range_start: pd.Timestamp,
+                            range_end: pd.Timestamp) -> pd.DataFrame:
+        """计算每天的借用小时数"""
+        all_days = pd.date_range(range_start.normalize(), range_end.normalize(), freq='D')
+        hours = pd.Series(0.0, index=all_days)
+
+        for _, row in df.iterrows():
+            start = max(row['Start'], range_start)
+            end = min(row['_end'], range_end + pd.Timedelta(days=1))
+            if start >= end:
+                continue
+            # 按天分配小时数
+            day = start.normalize()
+            while day <= end.normalize():
+                day_start = max(start, day)
+                day_end = min(end, day + pd.Timedelta(days=1))
+                h = (day_end - day_start).total_seconds() / 3600
+                if day in hours.index:
+                    hours[day] += h
+                day += pd.Timedelta(days=1)
+
+        daily = pd.DataFrame({'date': all_days, 'hours': hours.values})
+        daily['hours'] = daily['hours'].clip(upper=24).round(1)
+        daily['week'] = daily['date'].dt.isocalendar().week.astype(int)
+        daily['weekday'] = daily['date'].dt.weekday   # 0=Mon
+        daily['year_week'] = daily['date'].dt.strftime('%Y-W%U')
+        daily['month'] = daily['date'].dt.strftime('%Y-%m')
+        return daily
+
+    def visualize(self, result: dict):
+        if not result['success']:
             return None
-        
-        timeline = analysis_result['timeline']
-        item_name = analysis_result['item_name']
-        
-        fig = go.Figure()
-        
-        # 添加线条
-        fig.add_trace(go.Scatter(
-            x=timeline['date'],
-            y=timeline['status'],
-            mode='lines',
-            line=dict(color='#6514F2', width=3),
-            name='借用状态',
-            fill='tozeroy',
-            fillcolor='rgba(101, 20, 242, 0.2)',
-            hovertemplate='日期: %{x}<br>状态: %{y}<extra></extra>'
-        ))
-        
-        # 添加标记点
-        fig.add_trace(go.Scatter(
-            x=timeline['date'],
-            y=timeline['status'],
-            mode='markers',
-            marker=dict(color='#6514F2', size=6),
-            showlegend=False,
-            hoverinfo='skip'
-        ))
-        
-        # 布局设置
-        fig.update_layout(
-            title=f'物品借用时间线（日粒度）: {item_name}',
-            xaxis_title='日期',
-            yaxis_title='状态',
-            yaxis=dict(
-                tickvals=[0, 1],
-                ticktext=['在库', '已借出'],
-                range=[-0.2, 1.2],
-                fixedrange=False
-            ),
-            xaxis_rangeslider_visible=True,
-            hovermode='x unified',
-            height=620,
-            template='plotly_white'
+
+        daily = result['daily'].copy()
+        item_name = result['item_name']
+
+        # ── 图1：日历热力图 ──
+        # 用 scatter 模拟 GitHub contribution 风格
+        daily['weekday_name'] = daily['date'].dt.strftime('%a')
+        daily['date_str'] = daily['date'].dt.strftime('%Y-%m-%d')
+
+        # 按周分组，x=周，y=星期
+        WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        daily['dow'] = daily['date'].dt.weekday  # 0=Mon
+        daily['week_num'] = (
+            (daily['date'] - daily['date'].min()).dt.days // 7
         )
-        
-        # 美化网格
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
-        
-        return fig
+
+        fig_cal = go.Figure(go.Heatmap(
+            x=daily['week_num'],
+            y=daily['dow'],
+            z=daily['hours'],
+            text=daily['date_str'] + '<br>' + daily['hours'].astype(str) + 'h',
+            hovertemplate='%{text}<extra></extra>',
+            colorscale=[
+                [0,    '#EBEDF0'],
+                [0.01, '#C6E9A7'],
+                [0.25, '#7BC96F'],
+                [0.5,  '#239A3B'],
+                [1.0,  '#196127'],
+            ],
+            zmin=0,
+            zmax=24,
+            xgap=2,
+            ygap=2,
+            showscale=True,
+            colorbar=dict(title='小时', thickness=12, len=0.6),
+        ))
+
+        # 月份标签：取每月第一天所在的 week_num
+        month_ticks = (
+            daily.groupby('month')['week_num'].min()
+            .reset_index()
+        )
+
+        fig_cal.update_layout(
+            title=f'📅 {item_name} — 日历借用热力图',
+            xaxis=dict(
+                tickvals=month_ticks['week_num'].tolist(),
+                ticktext=month_ticks['month'].tolist(),
+                showgrid=False,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                tickvals=list(range(7)),
+                ticktext=WEEKDAYS,
+                showgrid=False,
+                autorange='reversed',
+            ),
+            template='plotly_white',
+            height=250,
+            margin=dict(l=50, r=20, t=60, b=40),
+        )
+
+        # ── 图2：月度柱状图 ──
+        monthly = (
+            daily.groupby('month')['hours']
+            .sum()
+            .reset_index()
+        )
+        monthly.columns = ['月份', '借用时长(h)']
+
+        fig_bar = px.bar(
+            monthly, x='月份', y='借用时长(h)',
+            title='📊 每月借用时长',
+            color='借用时长(h)',
+            color_continuous_scale='Greens',
+            text='借用时长(h)',
+        )
+        fig_bar.update_traces(texttemplate='%{text:.0f}h', textposition='outside')
+        fig_bar.update_layout(
+            template='plotly_white',
+            height=350,
+            coloraxis_showscale=False,
+            xaxis_tickangle=-30,
+            margin=dict(l=20, r=20, t=60, b=60),
+        )
+
+        return fig_cal, fig_bar

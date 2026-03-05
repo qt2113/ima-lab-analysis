@@ -1,7 +1,8 @@
 """
-Top N analysis strategy.
+Top N 分析策略 - 用 px.bar 和 px.line 展示趋势，px.box 展示时长分布
 """
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objs as go
 from typing import Optional
 
@@ -10,7 +11,6 @@ from config.settings import TIME_PERIODS
 
 
 class TopNAnalysis(AnalysisStrategy):
-    """Top N analysis for high-frequency items."""
 
     def analyze(
         self,
@@ -23,198 +23,134 @@ class TopNAnalysis(AnalysisStrategy):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None
     ) -> dict:
-        """
-        Analyze Top N items.
+        df = self.load_data(mode=mode, category=category,
+                            start_date=start_date, end_date=end_date)
 
-        Args:
-            category: Item category (optional).
-            mode: Data mode.
-            top_n: Top N size.
-            period: Time period ('Day', 'Week', 'Month', 'Year').
-            metric: Sort metric ('Count', 'Total Duration', 'Avg Duration').
-            item_name: Optional item name (without number) to filter.
-            start_date: Start date.
-            end_date: End date.
-
-        Returns:
-            Analysis result dict.
-        """
-        # Load data
-        df = self.load_data(
-            mode=mode,
-            category=category,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        # Filter by item name if provided
         if item_name:
             df = df[df['item name'] == item_name].copy()
 
         if df.empty:
-            return {
-                'success': False,
-                'message': 'No matching borrow records found',
-                'pivot': pd.DataFrame(),
-                'detail_data': pd.DataFrame()
-            }
+            return {'success': False, 'message': '没有找到匹配的借用记录'}
 
-        # Compute Top N by selected metric
-        duration_col = 'duration (hours)'
+        # 计算各物品的指标，确定 Top N
+        dur_col = 'duration (hours)'
         if metric == 'Count':
-            metric_series = df['item name(with num)'].value_counts()
-        else:
-            if duration_col not in df.columns:
-                return {
-                    'success': False,
-                    'message': 'Duration column missing; cannot sort by duration',
-                    'pivot': pd.DataFrame(),
-                    'detail_data': pd.DataFrame()
-                }
-            df_duration = df[df[duration_col].notna()].copy()
-            if df_duration.empty:
-                return {
-                    'success': False,
-                    'message': 'No non-empty duration values; cannot sort by duration',
-                    'pivot': pd.DataFrame(),
-                    'detail_data': pd.DataFrame()
-                }
+            scores = df['item name(with num)'].value_counts()
+        elif metric == 'Total Duration':
+            scores = df.groupby('item name(with num)')[dur_col].sum().sort_values(ascending=False)
+        else:  # Avg Duration
+            scores = df.groupby('item name(with num)')[dur_col].mean().sort_values(ascending=False)
 
-            if metric == 'Total Duration':
-                metric_series = (
-                    df_duration.groupby('item name(with num)')[duration_col]
-                    .sum()
-                    .sort_values(ascending=False)
-                )
-            else:  # Avg Duration
-                metric_series = (
-                    df_duration.groupby('item name(with num)')[duration_col]
-                    .mean()
-                    .sort_values(ascending=False)
-                )
-
-        top_items = metric_series.head(top_n).index
+        top_items = scores.head(top_n).index.tolist()
         df_top = df[df['item name(with num)'].isin(top_items)].copy()
 
-        # Create time series pivot
-        pivot = self._create_time_series(df_top, period)
+        # 时间分组
+        freq = TIME_PERIODS[period]
+        df_top['_period'] = df_top['Start'].dt.to_period(freq).dt.start_time
 
-        # Keep Top N order
-        pivot = pivot[top_items.intersection(pivot.columns)]
+        # 构建时间线 pivot（用于折线图）
+        pivot = (
+            df_top.groupby(['_period', 'item name(with num)'])
+            .size()
+            .reset_index(name='count')
+        )
+        # 保持 Top N 顺序
+        pivot['item name(with num)'] = pd.Categorical(
+            pivot['item name(with num)'], categories=top_items, ordered=True
+        )
+        pivot = pivot.sort_values(['_period', 'item name(with num)'])
 
-        category_label = category if category else 'All Categories'
-        
-        # 确定日期范围：优先使用用户输入，否则使用数据实际范围
-        if start_date:
-            range_start = pd.to_datetime(start_date)
-        else:
-            range_start = df['Start'].min()
-        
-        if end_date:
-            range_end = pd.to_datetime(end_date)
-        else:
-            range_end = df['Start'].max()
-        
         return {
             'success': True,
+            'df_top': df_top,
             'pivot': pivot,
-            'detail_data': df_top,
+            'top_items': top_items,
+            'scores': scores.head(top_n),
             'top_n': top_n,
             'period': period,
             'metric': metric,
-            'category': category_label,
+            'category': category or 'All',
             'date_range': {
-                'start': range_start,
-                'end': range_end
+                'start': pd.to_datetime(start_date) if start_date else df['Start'].min(),
+                'end': pd.to_datetime(end_date) if end_date else df['Start'].max(),
             }
         }
 
-    def _create_time_series(self, df: pd.DataFrame, period: str) -> pd.DataFrame:
-        """Create time series pivot table."""
-        df['period'] = df['Start'].dt.to_period(TIME_PERIODS[period]).dt.start_time
-        pivot = df.groupby(['period', 'item name(with num)']).size().unstack(fill_value=0)
-        return pivot
+    def visualize(self, result: dict):
+        if not result['success']:
+            return None, None, None
 
-    def visualize(self, analysis_result: dict) -> tuple:
-        """Visualize Top N results."""
-        if not analysis_result['success']:
-            return None, None
+        df_top = result['df_top']
+        pivot = result['pivot']
+        scores = result['scores']
+        top_items = result['top_items']
+        metric = result['metric']
+        period = result['period']
+        category = result['category']
+        top_n = result['top_n']
 
-        pivot = analysis_result['pivot']
-        df_detail = analysis_result['detail_data']
-        category = analysis_result['category']
-        top_n = analysis_result['top_n']
-        metric = analysis_result.get('metric', 'Count')
+        # ── 图1：总量横向柱状图（排行榜）──
+        bar_df = scores.reset_index()
+        bar_df.columns = ['物品', '数值']
+        bar_df['物品'] = pd.Categorical(bar_df['物品'], categories=top_items[::-1], ordered=True)
+        bar_df = bar_df.sort_values('物品')
 
-        fig_timeline = self._create_timeline_chart(pivot, category, top_n, metric)
-        fig_pie = self._create_duration_pie_chart(df_detail)
-
-        return fig_timeline, fig_pie
-
-    def _create_timeline_chart(self, pivot: pd.DataFrame, category: str, top_n: int, metric: str) -> go.Figure:
-        """Create timeline chart."""
-        fig = go.Figure()
-
-        for col in pivot.columns:
-            fig.add_trace(go.Scatter(
-                x=pivot.index,
-                y=pivot[col],
-                mode='lines+markers',
-                name=col,
-                line=dict(width=2),
-                marker=dict(size=6)
-            ))
-
-        fig.update_layout(
-            title=f'{category} - Top {top_n} ({metric}) Timeline',
-            xaxis_title='Time',
-            yaxis_title='Borrow Count',
-            legend_title='Item Number',
-            xaxis_rangeslider_visible=True,
-            height=560,
+        label_map = {'Count': '借用次数', 'Total Duration': '总借用时长 (h)', 'Avg Duration': '平均借用时长 (h)'}
+        fig_bar = px.bar(
+            bar_df, x='数值', y='物品', orientation='h',
+            color='数值',
+            color_continuous_scale='Blues',
+            text='数值',
+            title=f'🏆 {category} — Top {top_n} ({label_map[metric]})',
+            labels={'数值': label_map[metric], '物品': ''},
+        )
+        fig_bar.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+        fig_bar.update_layout(
             template='plotly_white',
-            hovermode='x unified'
+            height=max(300, top_n * 50 + 120),
+            coloraxis_showscale=False,
+            margin=dict(l=20, r=60, t=60, b=40),
         )
 
-        return fig
-
-    def _create_duration_pie_chart(self, df: pd.DataFrame) -> go.Figure:
-        """Create duration distribution pie chart."""
-        if 'duration (hours)' not in df.columns or df['duration (hours)'].isna().all():
-            return None
-
-        duration_counts = df['duration (hours)'].dropna().value_counts().reset_index()
-        duration_counts.columns = ['Duration (hours)', 'Frequency']
-
-        hover_texts = {}
-        for duration in duration_counts['Duration (hours)']:
-            items = df.loc[
-                df['duration (hours)'] == duration,
-                'item name(with num)'
-            ].unique().tolist()
-
-            short_items = [item[-3:] if len(item) >= 3 else item for item in items]
-            hover_texts[duration] = ', '.join(short_items)
-
-        fig = go.Figure(go.Pie(
-            labels=duration_counts['Duration (hours)'],
-            values=duration_counts['Frequency'],
-            hole=0.4,
-            hovertemplate=(
-                '<b>Duration:</b> %{label} hours<br>'
-                '<b>Frequency:</b> %{value}<br>'
-                '<b>Items:</b> %{customdata}<extra></extra>'
-            ),
-            customdata=duration_counts['Duration (hours)'].map(hover_texts).tolist(),
-            textinfo='label+percent',
-            textposition='inside'
-        ))
-
-        fig.update_layout(
-            title='Duration Distribution (Top N Items)',
-            height=500,
-            template='plotly_white'
+        # ── 图2：时间趋势折线图 ──
+        fig_line = px.line(
+            pivot, x='_period', y='count',
+            color='item name(with num)',
+            markers=True,
+            title=f'📈 借用趋势 — 按{period}',
+            labels={'_period': '时间', 'count': '借用次数', 'item name(with num)': '物品'},
+        )
+        fig_line.update_layout(
+            template='plotly_white',
+            height=450,
+            hovermode='x unified',
+            xaxis=dict(rangeslider_visible=True),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            margin=dict(l=20, r=20, t=60, b=40),
         )
 
-        return fig
+        # ── 图3：借用时长箱线图 ──
+        dur_col = 'duration (hours)'
+        df_dur = df_top[df_top[dur_col].notna() & (df_top[dur_col] > 0)].copy()
+        fig_box = None
+        if not df_dur.empty:
+            df_dur['item name(with num)'] = pd.Categorical(
+                df_dur['item name(with num)'], categories=top_items, ordered=True
+            )
+            fig_box = px.box(
+                df_dur.sort_values('item name(with num)'),
+                x='item name(with num)', y=dur_col,
+                color='item name(with num)',
+                title='📊 借用时长分布',
+                labels={dur_col: '时长 (小时)', 'item name(with num)': ''},
+                points='outliers',
+            )
+            fig_box.update_layout(
+                template='plotly_white',
+                height=400,
+                showlegend=False,
+                xaxis_tickangle=-20,
+                margin=dict(l=20, r=20, t=60, b=80),
+            )
 
+        return fig_bar, fig_line, fig_box

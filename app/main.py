@@ -1,619 +1,622 @@
 """
-IMA Lab 数据分析平台 - Streamlit主应用（带设置功能）
+IMA Lab — Equipment Borrowing Intelligence
+Streamlit shell + D3.js charts. No Plotly/Matplotlib.
 """
-import streamlit as st
-import pandas as pd
-import json
+import sys, json
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# 配置页面
-st.set_page_config(
-    page_title="IMA Lab 物品分析",
-    page_icon="🔬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+import streamlit as st
+import streamlit.components.v1 as components
 
-# 添加项目根目录到Python路径
-import sys
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
+                   initial_sidebar_state="expanded")
+st.cache_data.clear()
 
-# 导入模块
-from config.settings import CATEGORIES
-from data.database import db
-from data.loaders.historical_loader import load_historical_data
-from data.loaders.realtime_loader import load_realtime_data
-from data.processors.data_processor import DataProcessor
-from analysis.strategies.single_item_strategy import SingleItemAnalysis
-from analysis.strategies.topn_strategy import TopNAnalysis
-from analysis.strategies.duration_strategy import DurationAnalysis
+import analyzer
 
+# ── path fix (analyzer.py sits next to main.py in project root) ──
+analyzer._DB = Path(__file__).parent.parent / "item_analysis.db"
 
-# ==================== 配置管理 ====================
+# ══════════════════════════════════════════════════════════════════
+# GLOBAL STYLES
+# ══════════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=JetBrains+Mono:wght@300;400;600&display=swap');
 
-SETTINGS_FILE = Path(".streamlit/user_settings.json")
+html,[class*="css"]{font-family:'JetBrains Mono',monospace;}
+h1,h2,h3,.stTabs [data-baseweb="tab"]{font-family:'Syne',sans-serif!important;}
 
-def load_user_settings():
-    """加载用户自定义设置"""
-    default_settings = {
-        "google_sheet_id": "16-ijuA0O8x1Ckt3oEKldxmglGanSYUxXkDXOZMrY0VE",
-        "target_sheets": ["Fall 2025", "Spring 2026"],
-        "service_account_email": "qt2113@imalab-2025.iam.gserviceaccount.com"
-    }
-    
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                saved_settings = json.load(f)
-                # 合并默认设置和保存的设置
-                default_settings.update(saved_settings)
-        except Exception as e:
-            st.error(f"加载设置失败: {e}")
-    
-    return default_settings
+/* hide streamlit chrome */
+#MainMenu,footer,[data-testid="stToolbar"]{visibility:hidden;}
 
-def save_user_settings(settings):
-    """保存用户自定义设置"""
-    try:
-        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        st.error(f"保存设置失败: {e}")
-        return False
+/* tab styling */
+.stTabs [data-baseweb="tab-list"]{gap:0;border-bottom:1px solid #1c1c1c;}
+.stTabs [data-baseweb="tab"]{
+    background:transparent;border:none;color:#444;
+    font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    padding:10px 20px;font-family:'JetBrains Mono',monospace!important;
+}
+.stTabs [aria-selected="true"]{color:#e2ff5d!important;border-bottom:2px solid #e2ff5d!important;}
 
-def extract_sheet_id(url_or_id):
-    """从URL或直接ID中提取Sheet ID"""
-    url_or_id = url_or_id.strip()
-    
-    # 如果是完整URL
-    if 'docs.google.com' in url_or_id:
-        import re
-        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url_or_id)
-        if match:
-            return match.group(1)
-    
-    # 如果直接是ID
-    return url_or_id
+/* KPI cards */
+.kpi-row{display:flex;gap:12px;margin:16px 0;}
+.kpi{flex:1;background:#111;border:1px solid #1e1e1e;border-radius:6px;padding:18px 20px;}
+.kpi-label{font-size:9px;color:#444;letter-spacing:.15em;text-transform:uppercase;margin-bottom:6px;}
+.kpi-val{font-family:'Syne',sans-serif;font-size:36px;font-weight:800;color:#f0f0f0;line-height:1;}
+.kpi-sub{font-size:10px;color:#333;margin-top:5px;}
+.kpi.accent .kpi-val{color:#e2ff5d;}
+
+/* section headers */
+.sec{font-size:9px;color:#333;letter-spacing:.2em;text-transform:uppercase;
+     border-top:1px solid #1c1c1c;padding-top:14px;margin:24px 0 12px 0;}
+</style>
+""", unsafe_allow_html=True)
 
 
-# ==================== 设置对话框 ====================
+# ══════════════════════════════════════════════════════════════════
+# D3 CHART BUILDERS
+# Each returns raw HTML string injected via components.html()
+# ══════════════════════════════════════════════════════════════════
 
-def show_settings_dialog():
-    """显示设置对话框"""
-    
-    # 使用session_state管理对话框状态
-    if 'show_settings' not in st.session_state:
-        st.session_state.show_settings = False
-    
-    # 侧边栏按钮
-    with st.sidebar:
-        st.markdown('---')
-        if st.button('⚙️ Google Sheets 设置', use_container_width=True):
-            st.session_state.show_settings = True
-    
-    # 对话框内容
-    if st.session_state.show_settings:
-        with st.sidebar:
-            st.markdown('---')
-            st.subheader('⚙️ Google Sheets 配置')
-            
-            # 加载当前设置
-            current_settings = load_user_settings()
-            
-            # Sheet URL/ID 输入
-            st.markdown("**1️⃣ Google Sheet 链接或 ID**")
-            new_sheet_input = st.text_input(
-                "输入完整URL或Sheet ID",
-                value=current_settings['google_sheet_id'],
-                help="粘贴Google Sheet的完整链接，或只输入Sheet ID",
-                key='sheet_id_input'
-            )
-            
-            # 显示提取的ID
-            extracted_id = extract_sheet_id(new_sheet_input)
-            if extracted_id != new_sheet_input:
-                st.info(f"📋 提取的Sheet ID: `{extracted_id}`")
-            
-            # Target Sheets 输入
-            st.markdown("**2️⃣ 要拉取的工作表名称**")
-            st.caption("多个工作表用逗号分隔，例如：Fall 2025, Spring 2026")
-            
-            sheets_str = st.text_input(
-                "工作表名称",
-                value=", ".join(current_settings['target_sheets']),
-                help="输入要拉取数据的工作表名称，多个用逗号分隔",
-                key='sheets_input'
-            )
-            
-            # 解析输入的工作表名称
-            new_target_sheets = [s.strip() for s in sheets_str.split(',') if s.strip()]
-            
-            # 显示Service Account邮箱
-            st.markdown("**3️⃣ 授权访问（重要！）**")
-            st.warning(
-                f"⚠️ 请将以下邮箱添加到你的Google Sheet共享列表中：\n\n"
-                f"`{current_settings['service_account_email']}`"
-            )
-            
-            # 一键复制邮箱
-            if st.button('📋 复制Service Account邮箱', use_container_width=True):
-                st.code(current_settings['service_account_email'], language='text')
-                st.success("✅ 已显示邮箱，请手动复制")
-            
-            # 授权步骤说明
-            with st.expander('📖 如何授权？'):
-                st.markdown("""
-                1. 打开你的Google Sheet
-                2. 点击右上角 **"分享"** 按钮
-                3. 将上面的邮箱地址粘贴到输入框
-                4. 权限选择 **"查看者"** 或 **"编辑者"**
-                5. 取消勾选 "通知用户"
-                6. 点击 **"发送"**
-                7. 返回这里点击 **"保存设置"**
-                """)
-            
-            # 操作按钮
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button('💾 保存设置', use_container_width=True, type='primary'):
-                    # 保存新设置
-                    new_settings = {
-                        'google_sheet_id': extracted_id,
-                        'target_sheets': new_target_sheets,
-                        'service_account_email': current_settings['service_account_email']
-                    }
-                    
-                    if save_user_settings(new_settings):
-                        st.success('✅ 设置已保存！')
-                        st.info('💡 请点击"刷新数据"按钮以使用新的Sheet')
-                        # 清除缓存
-                        st.cache_data.clear()
-                        st.session_state.show_settings = False
-                        st.rerun()
-            
-            with col2:
-                if st.button('❌ 取消', use_container_width=True):
-                    st.session_state.show_settings = False
-                    st.rerun()
-            
-            st.markdown('---')
+D3 = "https://d3js.org/d3.v7.min.js"
+
+def _html(body: str, h: int) -> None:
+    components.html(f"""
+    <!DOCTYPE html><html><head>
+    <script src="{D3}"></script>
+    <style>
+      *{{margin:0;padding:0;box-sizing:border-box;}}
+      body{{background:#0a0a0a;overflow:hidden;}}
+      .tt{{position:fixed;pointer-events:none;background:#161616;border:1px solid #2a2a2a;
+           border-radius:5px;padding:9px 13px;font-family:'JetBrains Mono',monospace;
+           font-size:10px;line-height:1.9;color:#aaa;opacity:0;z-index:999;
+           transition:opacity .1s;}}
+    </style>
+    </head><body>
+    <div class="tt" id="tt"></div>
+    {body}
+    </body></html>
+    """, height=h)
 
 
-# ==================== 数据加载函数 ====================
-
-@st.cache_data(ttl=300)
-def get_available_items(category: str, mode: str = 'all') -> list:
-    """获取指定类别的所有物品（带编号）"""
-    source = None if mode == 'all' else mode
-    exclude_inventory = (mode == 'realtime')
-    
-    if category == 'All':
-        category = None
-    
-    df = db.query(source=source, category=category, exclude_inventory=exclude_inventory)
-    
-    if df.empty:
-        return []
-    
-    return sorted(df['item name(with num)'].dropna().unique().tolist())
-
-
-@st.cache_data(ttl=300)
-def get_date_range(mode: str = 'all') -> tuple:
-    """获取数据的日期范围（最早和最晚日期）"""
-    source = None if mode == 'all' else mode
-    exclude_inventory = (mode == 'realtime')
-    
-    df = db.query(source=source, exclude_inventory=exclude_inventory)
-    
-    if df.empty or 'Start' not in df.columns:
-        return None, None
-    
-    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
-    df = df.dropna(subset=['Start'])
-    
-    if df.empty:
-        return None, None
-    
-    min_date = df['Start'].min().strftime('%Y-%m-%d')
-    max_date = df['Start'].max().strftime('%Y-%m-%d')
-    
-    return min_date, max_date
-
-
-def fuzzy_search_items(category: str, query: str, mode: str = 'all') -> list:
-    """模糊搜索物品"""
-    all_items = get_available_items(category, mode)
-    
-    if not query:
-        return all_items
-    
-    query_lower = query.lower()
-    matches = [item for item in all_items if query_lower in item.lower()]
-    
-    return sorted(matches, key=lambda x: (not x.lower().startswith(query_lower), x))
+# ── Monthly line ─────────────────────────────────────
+def chart_monthly(data_json: str, h=240):
+    _html(f"""
+    <div id="c"></div><script>
+    const D = {data_json}.monthly;
+    const M={{t:20,r:20,b:44,l:46}};
+    const W=document.body.clientWidth, H={h};
+    const w=W-M.l-M.r, hh=H-M.t-M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const parse=d3.timeParse('%Y-%m');
+    D.forEach(d=>d.dt=parse(d.month));
+    const x=d3.scaleTime().domain(d3.extent(D,d=>d.dt)).range([0,w]);
+    const y=d3.scaleLinear().domain([0,d3.max(D,d=>d.count)*1.12]).range([hh,0]);
+    // area fill
+    g.append('path').datum(D)
+     .attr('d',d3.area().x(d=>x(d.dt)).y0(hh).y1(d=>y(d.count)).curve(d3.curveMonotoneX))
+     .attr('fill','#e2ff5d').attr('opacity',.06);
+    // gridlines
+    g.append('g').call(d3.axisLeft(y).ticks(4).tickSize(-w).tickFormat(''))
+     .selectAll('line').attr('stroke','#161616');
+    g.select('.domain').remove();
+    // line
+    g.append('path').datum(D)
+     .attr('d',d3.line().x(d=>x(d.dt)).y(d=>y(d.count)).curve(d3.curveMonotoneX))
+     .attr('fill','none').attr('stroke','#e2ff5d').attr('stroke-width',1.5);
+    // dots
+    const tt=d3.select('#tt');
+    g.selectAll('circle').data(D).enter().append('circle')
+     .attr('cx',d=>x(d.dt)).attr('cy',d=>y(d.count)).attr('r',3)
+     .attr('fill','#e2ff5d').attr('opacity',.7)
+     .on('mousemove',(ev,d)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+       .html(`<span style="color:#e2ff5d">${{d.month}}</span><br><b style="color:#fff">${{d.count}}</b> borrows`))
+     .on('mouseleave',()=>tt.style('opacity',0));
+    // axes
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).ticks(d3.timeMonth.every(3)).tickFormat(d3.timeFormat("%b '%y")))
+     .selectAll('text').attr('fill','#333').style('font-size','9px').attr('transform','rotate(-25)').attr('text-anchor','end');
+    g.append('g').call(d3.axisLeft(y).ticks(4))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    </script>""", h)
 
 
-def refresh_data(mode: str):
-    """刷新数据 - 使用用户自定义设置"""
-    settings = load_user_settings()
-    
-    with st.spinner('正在更新数据...'):
-        try:
-            # 临时修改配置
-            import config.settings as config_module
-            original_sheet_id = config_module.GOOGLE_SHEET_ID
-            original_sheets = config_module.TARGET_SHEETS
-            
-            config_module.GOOGLE_SHEET_ID = settings['google_sheet_id']
-            config_module.TARGET_SHEETS = settings['target_sheets']
-            
-            if mode == 'all':
-                # 加载历史数据
-                df_hist = load_historical_data()
-                db.insert_data(df_hist, source='historical', replace=True)
-                
-                # 加载实时数据
-                df_real = load_realtime_data(sheet_names=settings['target_sheets'])
-                
-                # 历史数据 vs 实时数据去重（以历史为准）
-                if not df_hist.empty and not df_real.empty:
-                    df_hist['Start'] = pd.to_datetime(df_hist['Start'], errors='coerce')
-                    df_real['Start'] = pd.to_datetime(df_real['Start'], errors='coerce')
-                    
-                    # 秒级精确匹配（保留备用）
-                    # hist_keys = set(zip(df_hist['Start'], df_hist['item name(with num)']))
-                    
-                    # 分钟级匹配（去除毫秒后匹配，误差1分钟内算同一条）
-                    df_hist['Start_min'] = df_hist['Start'].dt.floor('min')
-                    df_real['Start_min'] = df_real['Start'].dt.floor('min')
-                    hist_keys = set(zip(df_hist['Start_min'], df_hist['item name(with num)']))
-                    
-                    original_count = len(df_real)
-                    df_real = df_real[
-                        ~df_real.apply(lambda x: (x['Start_min'], x['item name(with num)']) in hist_keys, axis=1)
-                    ]
-                    removed_count = original_count - len(df_real)
-                    if removed_count > 0:
-                        st.info(f'🗑️  去除 {removed_count} 条与历史重复的实时数据')
-                    
-                    # 去除临时列，避免插入数据库时报错
-                    df_real = df_real.drop(columns=['Start_min'], errors='ignore')
-                
-                db.insert_data(df_real, source='realtime', replace=True)
-                
-                st.success(f'✅ 数据更新成功！历史: {len(df_hist)} 条，实时: {len(df_real)} 条')
-            else:
-                # 只加载实时数据
-                df_real = load_realtime_data(sheet_names=settings['target_sheets'])
-                db.insert_data(df_real, source='realtime', replace=True)
-                
-                st.success(f'✅ 实时数据更新成功！共 {len(df_real)} 条记录')
-            
-            # 恢复原配置
-            
-            # 清除缓存
-            st.cache_data.clear()
-            
-        except Exception as e:
-            st.error(f'❌ 数据更新失败: {str(e)}')
-            st.info('💡 请检查：\n1. Sheet ID是否正确\n2. Service Account是否已授权\n3. 工作表名称是否存在')
-        finally:
-            # ????????
-            config_module.GOOGLE_SHEET_ID = original_sheet_id
-            config_module.TARGET_SHEETS = original_sheets
+# ── Bubble / scatter ─────────────────────────────────
+def chart_bubble(data_json: str, h=360):
+    _html(f"""
+    <div id="c"></div><script>
+    const D={data_json}.bubble;
+    const M={{t:16,r:20,b:48,l:56}};
+    const W=document.body.clientWidth,H={h};
+    const w=W-M.l-M.r,hh=H-M.t-M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const x=d3.scaleLinear().domain([0,d3.max(D,d=>d.count)*1.08]).range([0,w]);
+    const y=d3.scaleLinear().domain([0,d3.max(D,d=>d.med_h)*1.1]).range([hh,0]);
+    const r=d3.scaleSqrt().domain([0,d3.max(D,d=>d.items)]).range([4,28]);
+    const col=d3.scaleOrdinal(d3.schemeTableau10).domain(D.map(d=>d.Category));
+    g.append('g').call(d3.axisLeft(y).ticks(5).tickSize(-w).tickFormat(d=>d+'h'))
+     .selectAll('line').attr('stroke','#161616');
+    g.select('.domain').remove();
+    const tt=d3.select('#tt');
+    g.selectAll('circle').data(D).enter().append('circle')
+     .attr('cx',d=>x(d.count)).attr('cy',d=>y(d.med_h))
+     .attr('r',d=>r(d.items)).attr('fill',d=>col(d.Category)).attr('opacity',.65)
+     .on('mousemove',(ev,d)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+       .html(`<b style="color:#fff">${{d.Category}}</b><br>
+              <span style="color:#555">BORROWS</span> <span style="color:#e2ff5d">${{d.count}}</span><br>
+              <span style="color:#555">MEDIAN DUR</span> <span style="color:#fff">${{d.med_h}}h</span><br>
+              <span style="color:#555">ITEMS</span> <span style="color:#aaa">${{d.items}}</span>`))
+     .on('mouseleave',()=>tt.style('opacity',0));
+    // labels for large bubbles
+    g.selectAll('text.lbl').data(D.filter(d=>d.items>5)).enter().append('text').attr('class','lbl')
+     .attr('x',d=>x(d.count)).attr('y',d=>y(d.med_h)+4)
+     .text(d=>d.Category.length>12?d.Category.slice(0,11)+'…':d.Category)
+     .attr('text-anchor','middle').attr('fill','#fff').attr('opacity',.5)
+     .style('font-size','8px').style('pointer-events','none');
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).ticks(5))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>d+'h'))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    // axis labels
+    svg.append('text').attr('x',M.l+w/2).attr('y',H-4)
+       .text('borrow count').attr('fill','#2a2a2a').attr('text-anchor','middle').style('font-size','9px');
+    svg.append('text').attr('transform','rotate(-90)').attr('x',-(M.t+hh/2)).attr('y',12)
+       .text('median duration (h)').attr('fill','#2a2a2a').attr('text-anchor','middle').style('font-size','9px');
+    </script>""", h)
 
 
-# ==================== 侧边栏配置 ====================
+# ── Utilization bars ─────────────────────────────────
+def chart_util_bars(data_json: str, h=520):
+    _html(f"""
+    <div id="c"></div><script>
+    const D={data_json}.bars;
+    if(!D||!D.length){{document.body.innerHTML='<p style="color:#333;padding:20px;font-family:monospace">No data</p>';return;}}
+    const M={{t:12,r:80,b:20,l:230}};
+    const W=document.body.clientWidth,H={h};
+    const w=W-M.l-M.r,hh=H-M.t-M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const y=d3.scaleBand().domain(D.map(d=>d.item)).range([0,hh]).padding(.3);
+    const x=d3.scaleLinear().domain([0,1]).range([0,w]);
+    const col=d3.scaleOrdinal(d3.schemeTableau10).domain([...new Set(D.map(d=>d.category))]);
+    // grid
+    g.append('g').call(d3.axisBottom(x).ticks(5).tickSize(hh).tickFormat(d=>(d*100).toFixed(0)+'%'))
+     .attr('transform','translate(0,0)').selectAll('line').attr('stroke','#161616');
+    g.select('.domain').remove();
+    const tt=d3.select('#tt');
+    // bars
+    g.selectAll('rect').data(D).enter().append('rect')
+     .attr('y',d=>y(d.item)).attr('height',y.bandwidth())
+     .attr('x',0).attr('width',0).attr('rx',2)
+     .attr('fill',d=>d.active?'#e2ff5d':col(d.category)).attr('opacity',d=>d.active?.9:.7)
+     .on('mousemove',(ev,d)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+       .html(`<b style="color:#fff">${{d.item}}</b><br>
+              <span style="color:#555">UTIL</span> <span style="color:#e2ff5d">${{(d.util*100).toFixed(1)}}%</span>
+              &nbsp;<span style="color:#555">BORROWS</span> <span style="color:#fff">${{d.count}}</span><br>
+              <span style="color:#555">AVG</span> <span style="color:#aaa">${{d.avg_h}}h</span>
+              ${{d.active?' <span style="color:#e2ff5d">● ACTIVE</span>':''}}` ))
+     .on('mouseleave',()=>tt.style('opacity',0))
+     .transition().duration(500).delay((_,i)=>i*18).attr('width',d=>x(d.util));
+    // item labels
+    g.selectAll('.lbl').data(D).enter().append('text').attr('class','lbl')
+     .attr('y',d=>y(d.item)+y.bandwidth()/2+4).attr('x',-6).attr('text-anchor','end')
+     .text(d=>d.item.length>32?d.item.slice(0,31)+'…':d.item)
+     .attr('fill','#3a3a3a').style('font-size','10px');
+    // % label
+    g.selectAll('.pct').data(D).enter().append('text').attr('class','pct')
+     .attr('y',d=>y(d.item)+y.bandwidth()/2+4).attr('x',d=>x(d.util)+5)
+     .text(d=>(d.util*100).toFixed(0)+'%')
+     .attr('fill',d=>d.active?'#e2ff5d':'#333').style('font-size','9px');
+    // x axis bottom
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).ticks(5).tickFormat(d=>(d*100).toFixed(0)+'%'))
+     .selectAll('text').attr('fill','#2a2a2a').style('font-size','9px');
+    </script>""", h)
 
+
+# ── Quadrant scatter ──────────────────────────────────
+def chart_quadrant(data_json: str, h=400):
+    _html(f"""
+    <div id="c"></div><script>
+    const raw={data_json}.quadrant;
+    const D=raw.filter(d=>d.count>0&&d.avg_h>0);
+    const M={{t:20,r:20,b:48,l:58}};
+    const W=document.body.clientWidth,H={h};
+    const w=W-M.l-M.r,hh=H-M.t-M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const x=d3.scaleLinear().domain([0,d3.max(D,d=>d.count)*1.08]).range([0,w]);
+    const y=d3.scaleLinear().domain([0,d3.max(D,d=>d.avg_h)*1.08]).range([hh,0]);
+    const col=d3.scaleOrdinal(d3.schemeTableau10).domain([...new Set(D.map(d=>d.category))]);
+    // quadrant lines (medians)
+    const mx=d3.median(D,d=>d.count), my=d3.median(D,d=>d.avg_h);
+    g.append('line').attr('x1',x(mx)).attr('x2',x(mx)).attr('y1',0).attr('y2',hh)
+     .attr('stroke','#1e1e1e').attr('stroke-dasharray','4,4');
+    g.append('line').attr('x1',0).attr('x2',w).attr('y1',y(my)).attr('y2',y(my))
+     .attr('stroke','#1e1e1e').attr('stroke-dasharray','4,4');
+    // quadrant labels
+    [['HIGH DEMAND\\nLONG HOLD',w*.75,hh*.15,'#2a2a2a'],
+     ['FREQUENT\\nSHORT USE',w*.75,hh*.85,'#2a2a2a'],
+     ['RARE\\nLONG HOLD',w*.1,hh*.15,'#2a2a2a'],
+     ['LOW DEMAND\\nQUICK USE',w*.1,hh*.85,'#2a2a2a']].forEach(([t,tx,ty,fc])=>{{
+       t.split('\\n').forEach((line,i)=>
+         g.append('text').attr('x',tx).attr('y',ty+i*11)
+          .text(line).attr('fill',fc).style('font-size','8px').attr('text-anchor','middle')
+          .style('letter-spacing','.1em'));
+    }});
+    const tt=d3.select('#tt');
+    g.selectAll('circle').data(D).enter().append('circle')
+     .attr('cx',d=>x(d.count)).attr('cy',d=>y(d.avg_h))
+     .attr('r',d=>d.active?6:4)
+     .attr('fill',d=>d.active?'#e2ff5d':col(d.category))
+     .attr('opacity',d=>d.active?1:.5)
+     .on('mousemove',(ev,d)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+       .html(`<b style="color:#fff">${{d.item}}</b><br>
+              <span style="color:#555">CAT</span> <span style="color:#aaa">${{d.category}}</span><br>
+              <span style="color:#555">BORROWS</span> <span style="color:#e2ff5d">${{d.count}}</span>  
+              <span style="color:#555">AVG</span> <span style="color:#fff">${{d.avg_h}}h</span>`))
+     .on('mouseleave',()=>tt.style('opacity',0));
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).ticks(5)).selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.append('g').call(d3.axisLeft(y).ticks(5).tickFormat(d=>d+'h'))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    svg.append('text').attr('x',M.l+w/2).attr('y',H-4)
+       .text('borrow frequency').attr('fill','#222').attr('text-anchor','middle').style('font-size','9px');
+    svg.append('text').attr('transform','rotate(-90)').attr('x',-(M.t+hh/2)).attr('y',13)
+       .text('avg hold duration (h)').attr('fill','#222').attr('text-anchor','middle').style('font-size','9px');
+    </script>""", h)
+
+
+# ── Gantt ─────────────────────────────────────────────
+def chart_gantt(data_json: str, h=380):
+    _html(f"""
+    <div id="c"></div><script>
+    const raw={data_json};
+    const D=raw.gantt; const stats=raw.stats;
+    if(!D||!D.length){{document.body.innerHTML='<p style="color:#333;padding:20px;font-family:monospace">No records</p>';return;}}
+    const parse=d3.timeParse('%Y-%m-%dT%H:%M:%S');
+    D.forEach(d=>{{d.s=parse(d.start);d.e=parse(d.end);}});
+    const M={{t:16,r:20,b:44,l:16}};
+    const W=document.body.clientWidth,H={h};
+    const w=W-M.l-M.r,hh=H-M.t-M.b;
+    const barH=Math.max(5,Math.min(20,(hh-20)/D.length-2));
+    const gap=Math.max(1,barH*.2);
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const allT=D.flatMap(d=>[d.s,d.e]).filter(Boolean);
+    const x=d3.scaleTime().domain([d3.min(allT),d3.max(allT)]).range([0,w]);
+    // grid
+    g.append('g').call(d3.axisBottom(x).ticks(6).tickSize(hh).tickFormat(''))
+     .attr('transform','translate(0,0)').selectAll('line').attr('stroke','#141414');
+    g.select('.domain').remove();
+    const tt=d3.select('#tt');
+    D.forEach((d,i)=>{{
+      const clr=d.active?'#e2ff5d':d.source==='realtime'?'#4ade80':'#60a5fa';
+      const bw=Math.max(2,x(d.e)-x(d.s));
+      g.append('rect')
+       .attr('x',x(d.s)).attr('y',i*(barH+gap))
+       .attr('width',bw).attr('height',barH).attr('rx',1.5)
+       .attr('fill',clr).attr('opacity',.8)
+       .on('mousemove',(ev)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+         .html(`<span style="color:#555">START</span> <span style="color:#fff">${{d.start.replace('T',' ')}}</span><br>
+                <span style="color:#555">END &nbsp;</span> <span style="color:#aaa">${{d.end.replace('T',' ')}}</span><br>
+                <span style="color:#555">DUR &nbsp;</span> <span style="color:#e2ff5d">${{d.hours!=null?d.hours+'h':'ongoing'}}</span>
+                <span style="color:#555"> · ${{d.source}}</span>`))
+       .on('mouseleave',()=>tt.style('opacity',0));
+    }});
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).ticks(7).tickFormat(d3.timeFormat('%b %Y')))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    // legend
+    [['historical','#60a5fa'],['realtime','#4ade80'],['active','#e2ff5d']].forEach(([l,c],i)=>{{
+      const lg=svg.append('g').attr('transform',`translate(${{M.l+i*90}},${{H-6}})`);
+      lg.append('rect').attr('width',8).attr('height',8).attr('rx',1).attr('fill',c).attr('opacity',.8);
+      lg.append('text').attr('x',12).attr('y',8).text(l).attr('fill','#333').style('font-size','9px');
+    }});
+    </script>""", h)
+
+
+# ── Monthly bars (item detail) ────────────────────────
+def chart_monthly_bars(data_json: str, h=200):
+    _html(f"""
+    <div id="c"></div><script>
+    const D={data_json}.monthly;
+    if(!D||!D.length) return;
+    const M={{t:12,r:16,b:48,l:44}};
+    const W=document.body.clientWidth,H={h};
+    const w=W-M.l-M.r,hh=H-M.t-M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const x=d3.scaleBand().domain(D.map(d=>d.month)).range([0,w]).padding(.25);
+    const y=d3.scaleLinear().domain([0,d3.max(D,d=>d.total_h)*1.12]).range([hh,0]);
+    g.append('g').call(d3.axisLeft(y).ticks(4).tickSize(-w).tickFormat(d=>d+'h'))
+     .selectAll('line').attr('stroke','#161616');
+    g.select('.domain').remove();
+    const tt=d3.select('#tt');
+    g.selectAll('rect').data(D).enter().append('rect')
+     .attr('x',d=>x(d.month)).attr('y',d=>y(d.total_h))
+     .attr('width',x.bandwidth()).attr('height',d=>hh-y(d.total_h))
+     .attr('rx',2).attr('fill','#60a5fa').attr('opacity',.7)
+     .on('mousemove',(ev,d)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+       .html(`<span style="color:#aaa">${{d.month}}</span><br>
+              <span style="color:#60a5fa">${{d.total_h}}h</span> · <span style="color:#fff">${{d.count}} borrows</span>`))
+     .on('mouseleave',()=>tt.style('opacity',0));
+    g.append('g').attr('transform',`translate(0,${{hh}})`)
+     .call(d3.axisBottom(x).tickValues(x.domain().filter((_,i)=>i%Math.ceil(D.length/8)===0)))
+     .selectAll('text').attr('fill','#333').style('font-size','9px').attr('transform','rotate(-30)').attr('text-anchor','end');
+    g.append('g').call(d3.axisLeft(y).ticks(4).tickFormat(d=>d+'h'))
+     .selectAll('text').attr('fill','#333').style('font-size','9px');
+    g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    </script>""", h)
+
+
+# ── Temporal heatmap (weekday × hour) ────────────────
+def chart_temporal(data_json: str, h=220):
+    _html(f"""
+    <div id="c"></div><script>
+    const raw={data_json};
+    const D=raw.heatmap;
+    const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const cs=14, gap=2, unit=cs+gap;
+    const M={{t:20,r:16,b:28,l:36}};
+    const W=document.body.clientWidth;
+    const gW=24*unit, gH=7*unit;
+    const H=gH+M.t+M.b;
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    const g=svg.append('g').attr('transform',`translate(${{M.l}},${{M.t}})`);
+    const maxC=d3.max(D,d=>d.count)||1;
+    const col=d3.scaleSequential().domain([0,maxC]).interpolator(d3.interpolate('#141414','#e2ff5d'));
+    // empty grid
+    for(let wd=0;wd<7;wd++) for(let h=0;h<24;h++)
+      g.append('rect').attr('x',h*unit).attr('y',wd*unit)
+       .attr('width',cs).attr('height',cs).attr('rx',2).attr('fill','#141414');
+    const tt=d3.select('#tt');
+    D.forEach(d=>{{
+      g.append('rect')
+       .attr('x',d.hour*unit).attr('y',d.weekday*unit)
+       .attr('width',cs).attr('height',cs).attr('rx',2)
+       .attr('fill',col(d.count))
+       .on('mousemove',(ev)=>tt.style('opacity',1).style('left',ev.clientX+12+'px').style('top',ev.clientY-8+'px')
+         .html(`<span style="color:#555">${{DAYS[d.weekday]}} ${{String(d.hour).padStart(2,'0')}}:00</span><br><b style="color:#e2ff5d">${{d.count}}</b> borrows`))
+       .on('mouseleave',()=>tt.style('opacity',0));
+    }});
+    DAYS.forEach((l,i)=>g.append('text').attr('x',-4).attr('y',i*unit+cs-2)
+      .text(l).attr('fill','#2a2a2a').style('font-size','9px').attr('text-anchor','end'));
+    [0,6,12,18,23].forEach(h=>g.append('text').attr('x',h*unit+cs/2).attr('y',-6)
+      .text(String(h).padStart(2,'0')+'h').attr('fill','#2a2a2a').style('font-size','9px').attr('text-anchor','middle'));
+    </script>""", h)
+
+
+# ── Weekday + month bars ──────────────────────────────
+def chart_by_weekday_month(data_json: str, h=200):
+    _html(f"""
+    <div id="c"></div><script>
+    const raw={data_json};
+    const WD=raw.by_weekday, MO=raw.by_month;
+    const M={{t:12,r:16,b:36,l:40}};
+    const W=document.body.clientWidth,H={h};
+    const hw=(W-M.l-M.r)/2-8, hh=H-M.t-M.b;
+
+    function drawBars(sel,data,xKey,yKey,color,offX){{
+      const g=sel.append('g').attr('transform',`translate(${{offX}},${{M.t}})`);
+      const x=d3.scaleBand().domain(data.map(d=>d[xKey])).range([0,hw]).padding(.25);
+      const y=d3.scaleLinear().domain([0,d3.max(data,d=>d[yKey])*1.12]).range([hh,0]);
+      g.selectAll('rect').data(data).enter().append('rect')
+       .attr('x',d=>x(d[xKey])).attr('y',d=>y(d[yKey]))
+       .attr('width',x.bandwidth()).attr('height',d=>hh-y(d[yKey]))
+       .attr('rx',2).attr('fill',color).attr('opacity',.75);
+      g.append('g').attr('transform',`translate(0,${{hh}})`)
+       .call(d3.axisBottom(x)).selectAll('text').attr('fill','#333').style('font-size','9px');
+      g.append('g').call(d3.axisLeft(y).ticks(3))
+       .selectAll('text').attr('fill','#333').style('font-size','9px');
+      g.selectAll('.domain,.tick line').attr('stroke','#1e1e1e');
+    }}
+    const svg=d3.select('#c').append('svg').attr('width',W).attr('height',H);
+    drawBars(svg,WD,'label','count','#60a5fa',M.l);
+    drawBars(svg,MO,'label','count','#4ade80',M.l+hw+24);
+    svg.append('text').attr('x',M.l+hw/2).attr('y',H).text('by weekday')
+       .attr('fill','#222').attr('text-anchor','middle').style('font-size','9px');
+    svg.append('text').attr('x',M.l+hw+24+hw/2).attr('y',H).text('by month')
+       .attr('fill','#222').attr('text-anchor','middle').style('font-size','9px');
+    </script>""", h)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.title('🔬 IMA Lab')
-    
-    # 显示当前配置
-    current_settings = load_user_settings()
-    with st.expander('📊 当前配置', expanded=False):
-        st.caption(f"Sheet ID: `{current_settings['google_sheet_id'][:20]}...`")
-        st.caption(f"工作表: {', '.join(current_settings['target_sheets'])}")
-    
-    st.markdown('---')
-    
-    # 数据模式选择
-    st.subheader('📊 数据模式')
-    mode = st.radio(
-        '选择数据源',
-        options=['all', 'realtime'],
-        format_func=lambda x: '📚 全部数据' if x == 'all' else '🔄 仅实时数据',
-        key='data_mode'
-    )
-    
-    if mode == 'all':
-        st.info('包含历史数据 + 实时数据')
-    else:
-        st.info('仅显示实时数据（排除Inventory）')
-    
-    # 刷新按钮
-    if st.button('🔄 刷新数据', use_container_width=True):
-        refresh_data(mode)
-    
-    # 设置对话框
-    show_settings_dialog()
-    
-    st.markdown('---')
-    
-    # 数据库统计
-    with st.expander('📈 数据统计', expanded=False):
-        stats = db.get_statistics()
-        st.metric('总记录数', stats['total_records'])
-        
-        if 'by_source' in stats and stats['by_source']:
-            st.write('**各来源记录数:**')
-            for source, count in stats['by_source'].items():
-                st.write(f'- {source}: {count}')
-    
-    st.markdown('---')
-    st.caption('Powered by Streamlit')
+    st.markdown("### ◈ IMA Lab")
+    st.markdown("---")
+
+    src_opt = st.radio("Source", ["All", "Historical", "Realtime"],
+                       horizontal=True, label_visibility="collapsed")
+    _src = {"All": None, "Historical": "historical", "Realtime": "realtime"}[src_opt]
+
+    bounds = analyzer.get_bounds(_src)
+    c1, c2 = st.columns(2)
+    with c1:
+        _start = st.text_input("From", value=bounds['min'],
+                                label_visibility="collapsed", placeholder="YYYY-MM-DD")
+    with c2:
+        _end = st.text_input("To", value=bounds['max'],
+                              label_visibility="collapsed", placeholder="YYYY-MM-DD")
+
+    st.markdown("---")
+    if st.button("↺  Refresh realtime", use_container_width=True):
+        with st.spinner("Fetching…"):
+            try:
+                from data.loaders.realtime_loader import load_realtime_data
+                from data.database import db
+                df_r = load_realtime_data()
+                db.insert_data(df_r, source='realtime', replace=True)
+                st.success(f"Updated: {len(df_r)} records")
+                st.cache_data.clear()
+            except Exception as e:
+                st.error(str(e))
+
+    st.markdown("---")
+    from data.database import db as _db
+    stats = _db.get_statistics()
+    st.caption(f"historical  {stats['by_source'].get('historical',0):,}")
+    st.caption(f"realtime    {stats['by_source'].get('realtime',0):,}")
 
 
-# ==================== 主页面 ====================
-
-st.title('🔬 IMA Lab 物品借用分析平台')
-
-# 创建选项卡
-tab1, tab2, tab3 = st.tabs(['📈 单品分析', '🏆 Top N分析', '📊 时间线分析'])
-
-# ==================== Tab 1: 单品分析 ====================
-with tab1:
-    st.header('单品借用时间线')
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        category_si = st.selectbox(
-            '类别',
-            options=['All'] + CATEGORIES,
-            index=0,
-            key='single_item_category'
-        )
-    
-    with col2:
-        search_query_si = st.text_input(
-            '搜索物品',
-            placeholder='输入物品名称或编号...',
-            key='single_item_search'
-        )
-    
-    # 物品选择
-    if search_query_si:
-        items_si = fuzzy_search_items(category_si, search_query_si, mode)
-    else:
-        items_si = get_available_items(category_si, mode)
-    
-    item_si = st.selectbox(
-        '选择物品（带编号）',
-        options=items_si,
-        key='single_item_select'
-    )
-    
-    # 时间范围
-    min_date, max_date = get_date_range(mode)
-    col3, col4 = st.columns(2)
-    with col3:
-        start_date_si = st.text_input('开始日期', value=min_date or '', key='si_start')
-    with col4:
-        end_date_si = st.text_input('结束日期', value=max_date or '', key='si_end')
-    
-    # 运行分析
-    if st.button('🚀 运行分析', key='run_single_item', use_container_width=True):
-        if not item_si:
-            st.warning('⚠️ 请先选择一个物品')
-        else:
-            with st.spinner('正在分析...'):
-                analyzer = SingleItemAnalysis()
-                result = analyzer.analyze(
-                    item_with_num=item_si,
-                    category=None if category_si == 'All' else category_si,
-                    mode=mode,
-                    start_date=start_date_si if start_date_si else None,
-                    end_date=end_date_si if end_date_si else None
-                )
-                
-                if result['success']:
-                    # 显示统计信息
-                    col5, col6, col7 = st.columns(3)
-                    with col5:
-                        st.metric('总借用次数', result['total_borrows'])
-                    with col6:
-                        st.metric('起始日期', result['date_range']['start'].strftime('%Y-%m-%d'))
-                    with col7:
-                        st.metric('结束日期', result['date_range']['end'].strftime('%Y-%m-%d'))
-                    
-                    # 显示图表
-                    fig = analyzer.visualize(result)
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.error(result['message'])
-
-
-# ==================== Tab 2: Top N分析 ====================
-with tab2:
-    st.header('Top N 高频物品分析')
-    
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        category_tn = st.selectbox(
-            '类别',
-            options=['All'] + CATEGORIES,
-            index=0,
-            key='topn_category'
-        )
-    
-    with col2:
-        top_n = st.number_input('Top N', min_value=1, max_value=20, value=5, key='topn_n')
-    
-    with col3:
-        period_tn = st.selectbox(
-            '时间周期',
-            options=['Day', 'Week', 'Month', 'Year'],
-            index=1,
-            key='topn_period'
-        )
-    
-    metric_tn = st.selectbox(
-        'Sort Metric',
-        options=['Count', 'Total Duration', 'Avg Duration'],
-        index=0,
-        key='topn_metric'
-    )
-    
-    # 可选：限定物品名称
-    col4, col5 = st.columns([1, 1])
-    with col4:
-        search_query_tn = st.text_input(
-            '搜索物品（可选）',
-            placeholder='留空则分析全类别',
-            key='topn_search'
-        )
-    
-    with col5:
-        if search_query_tn:
-            df_temp = db.query(category=None if category_tn == 'All' else category_tn)
-            item_names = DataProcessor.fuzzy_search(df_temp, search_query_tn, 'item name')
-            item_name_tn = st.selectbox('物品名称', options=[''] + item_names, key='topn_item_name')
-        else:
-            item_name_tn = None
-    
-    # 时间范围
-    min_date, max_date = get_date_range(mode)
-    col6, col7 = st.columns(2)
-    with col6:
-        start_date_tn = st.text_input('开始日期', value=min_date or '', key='tn_start')
-    with col7:
-        end_date_tn = st.text_input('结束日期', value=max_date or '', key='tn_end')
-    
-    # 运行分析
-    if st.button('🚀 运行分析', key='run_topn', use_container_width=True):
-        with st.spinner('正在分析...'):
-            analyzer = TopNAnalysis()
-            result = analyzer.analyze(
-                category=None if category_tn == 'All' else category_tn,
-                mode=mode,
-                top_n=top_n,
-                period=period_tn,
-                metric=metric_tn,
-                item_name=item_name_tn if item_name_tn else None,
-                start_date=start_date_tn if start_date_tn else None,
-                end_date=end_date_tn if end_date_tn else None
-            )
-            
-            if result['success']:
-                fig_timeline, fig_pie = analyzer.visualize(result)
-                
-                # 显示时间线图
-                st.subheader('📈 借用次数时间线')
-                st.plotly_chart(fig_timeline, use_container_width=True)
-                
-                # 显示饼图
-                if fig_pie:
-                    st.subheader('🍰 借用时长分布')
-                    st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.error(result['message'])
-
-
-# ==================== Tab 3: 时间线分析 ====================
-with tab3:
-    st.header('物品借用时间线（日粒度）')
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        category_dur = st.selectbox(
-            '类别',
-            options=['All'] + CATEGORIES,
-            index=0,
-            key='duration_category'
-        )
-    
-    with col2:
-        search_query_dur = st.text_input(
-            '搜索物品',
-            placeholder='输入物品名称或编号...',
-            key='duration_search'
-        )
-    
-    # 物品选择
-    if search_query_dur:
-        items_dur = fuzzy_search_items(category_dur, search_query_dur, mode)
-    else:
-        items_dur = get_available_items(category_dur, mode)
-    
-    item_dur = st.selectbox(
-        '选择物品（带编号）',
-        options=items_dur,
-        key='duration_select'
-    )
-    
-    # 时间范围
-    min_date, max_date = get_date_range(mode)
-    col3, col4 = st.columns(2)
-    with col3:
-        start_date_dur = st.text_input('开始日期', value=min_date or '', key='dur_start')
-    with col4:
-        end_date_dur = st.text_input('结束日期', value=max_date or '', key='dur_end')
-    
-    # 运行分析
-    if st.button('🚀 运行分析', key='run_duration', use_container_width=True):
-        if not item_dur:
-            st.warning('⚠️ 请先选择一个物品')
-        else:
-            with st.spinner('正在分析...'):
-                analyzer = DurationAnalysis()
-                result = analyzer.analyze(
-                    item_with_num=item_dur,
-                    category=None if category_dur == 'All' else category_dur,
-                    mode=mode,
-                    start_date=start_date_dur if start_date_dur else None,
-                    end_date=end_date_dur if end_date_dur else None
-                )
-                
-                if result['success']:
-                    # 显示统计信息
-                    col5, col6, col7, col8 = st.columns(4)
-                    with col5:
-                        st.metric('总借用次数', result['total_borrows'])
-                    with col6:
-                        total_days = (result['date_range']['end'] - result['date_range']['start']).days + 1
-                        st.metric('时间跨度', f'{total_days} 天')
-                    with col7:
-                        borrowed_days = result['timeline']['status'].sum()
-                        st.metric('借出天数', borrowed_days)
-                    with col8:
-                        utilization = (borrowed_days / total_days * 100) if total_days > 0 else 0
-                        st.metric('使用率', f'{utilization:.1f}%')
-                    
-                    # 显示图表
-                    fig = analyzer.visualize(result)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # 显示详细数据（可选）
-                    with st.expander('📊 查看详细数据'):
-                        st.dataframe(result['timeline'], use_container_width=True)
-                else:
-                    st.error(result['message'])
-
-
-# ==================== 页脚 ====================
-st.markdown('---')
+# ══════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════
 st.markdown(
-    """
-    <div style='text-align: center; color: gray;'>
-    <p>IMA Lab 物品借用分析平台 | 数据来源: Google Sheets + 历史记录</p>
-    </div>
-    """,
+    "<h1 style='font-family:Syne,sans-serif;font-weight:800;font-size:2.4rem;"
+    "letter-spacing:-.04em;margin-bottom:0'>IMA Lab</h1>"
+    "<p style='font-family:JetBrains Mono,monospace;font-size:10px;color:#333;"
+    "letter-spacing:.15em;margin-top:4px'>EQUIPMENT BORROWING INTELLIGENCE</p>",
     unsafe_allow_html=True
 )
+
+tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Fleet Health", "Item Detail", "Patterns"])
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 1 — OVERVIEW
+# ══════════════════════════════════════════════════════════════════
+with tab1:
+    ov = json.loads(analyzer.overview(source=_src, start=_start or None, end=_end or None))
+    kpi = ov['kpi']
+
+    st.markdown(f"""
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Total Borrows</div>
+        <div class="kpi-val">{kpi['total']:,}</div></div>
+      <div class="kpi"><div class="kpi-label">Unique Items</div>
+        <div class="kpi-val">{kpi['unique_items']:,}</div></div>
+      <div class="kpi accent"><div class="kpi-label">Currently Out</div>
+        <div class="kpi-val">{kpi['active_now']}</div></div>
+      <div class="kpi"><div class="kpi-label">Avg Hold</div>
+        <div class="kpi-val">{kpi['avg_hours']:.0f}<span style="font-size:18px;color:#333">h</span></div></div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown('<div class="sec">Monthly Borrow Volume</div>', unsafe_allow_html=True)
+    chart_monthly(json.dumps(ov), h=240)
+
+    st.markdown('<div class="sec">Category Landscape — size = unique items · x = volume · y = median hold</div>',
+                unsafe_allow_html=True)
+    chart_bubble(json.dumps(ov), h=360)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 2 — FLEET HEALTH
+# ══════════════════════════════════════════════════════════════════
+with tab2:
+    cats = ["(All categories)"] + analyzer.get_categories()
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        sel_cat = st.selectbox("Category", cats, key="fh_cat",
+                               label_visibility="collapsed")
+    with c2:
+        top_n = st.slider("Top N", 10, 50, 25, key="fh_n",
+                          label_visibility="collapsed")
+
+    fh = json.loads(analyzer.fleet_health(
+        category=None if sel_cat.startswith("(") else sel_cat,
+        source=_src, start=_start or None, end=_end or None, top_n=top_n
+    ))
+
+    st.markdown(
+        '<div class="sec">Utilization Ranking — cumulative borrow days ÷ active lifespan</div>',
+        unsafe_allow_html=True)
+    st.caption("Yellow = currently checked out")
+    bar_h = max(320, top_n * 26 + 80)
+    chart_util_bars(json.dumps(fh), h=bar_h)
+
+    st.markdown(
+        '<div class="sec">Demand × Hold Duration — four quadrants reveal usage archetypes</div>',
+        unsafe_allow_html=True)
+    chart_quadrant(json.dumps(fh), h=400)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 3 — ITEM DETAIL
+# ══════════════════════════════════════════════════════════════════
+with tab3:
+    cats3 = ["(All)"] + analyzer.get_categories()
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        sel_cat3 = st.selectbox("Category", cats3, key="id_cat",
+                                label_visibility="collapsed")
+    with c2:
+        items = analyzer.get_items(
+            category=None if sel_cat3 == "(All)" else sel_cat3,
+            source=_src)
+        query = st.text_input("Filter item", placeholder="type to search…",
+                              key="id_q", label_visibility="collapsed")
+        if query:
+            items = [i for i in items if query.lower() in i.lower()]
+
+    sel_item = st.selectbox("Item", items, key="id_item",
+                            label_visibility="collapsed") if items else None
+
+    if sel_item:
+        det = json.loads(analyzer.item_detail(
+            sel_item, start=_start or None, end=_end or None))
+        s = det['stats']
+
+        if s:
+            st.markdown(f"""
+            <div class="kpi-row">
+              <div class="kpi"><div class="kpi-label">Category</div>
+                <div class="kpi-val" style="font-size:18px;padding-top:6px">{s.get('category','—')}</div></div>
+              <div class="kpi"><div class="kpi-label">Total Borrows</div>
+                <div class="kpi-val">{s['total']}</div></div>
+              <div class="kpi"><div class="kpi-label">Avg Hold</div>
+                <div class="kpi-val">{s['avg_h']}<span style="font-size:16px;color:#333">h</span></div></div>
+              <div class="kpi"><div class="kpi-label">Max Hold</div>
+                <div class="kpi-val">{s['max_h']}<span style="font-size:16px;color:#333">h</span></div></div>
+              <div class="kpi {'accent' if s['active_now'] else ''}">
+                <div class="kpi-label">Status</div>
+                <div class="kpi-val" style="font-size:20px;padding-top:6px">
+                  {"● OUT" if s['active_now'] else "✓ IN"}</div></div>
+            </div>""", unsafe_allow_html=True)
+
+        st.markdown('<div class="sec">Full Borrow Timeline</div>', unsafe_allow_html=True)
+        n = len(det['gantt'])
+        g_h = max(280, min(n * 22 + 100, 680))
+        chart_gantt(json.dumps(det), h=g_h)
+
+        if det['monthly']:
+            st.markdown('<div class="sec">Monthly Hold Hours</div>', unsafe_allow_html=True)
+            chart_monthly_bars(json.dumps(det), h=200)
+    else:
+        st.markdown(
+            "<p style='color:#2a2a2a;font-family:JetBrains Mono,monospace;"
+            "font-size:12px;margin-top:40px;text-align:center'>"
+            "select a category → filter → pick an item</p>",
+            unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 4 — TEMPORAL PATTERNS
+# ══════════════════════════════════════════════════════════════════
+with tab4:
+    cats4 = ["(All)"] + analyzer.get_categories()
+    sel_cat4 = st.selectbox("Category", cats4, key="tp_cat",
+                            label_visibility="collapsed")
+
+    tp = json.loads(analyzer.temporal_patterns(
+        category=None if sel_cat4 == "(All)" else sel_cat4,
+        source=_src, start=_start or None, end=_end or None
+    ))
+
+    st.markdown('<div class="sec">Borrow Initiation Heatmap — weekday × hour of day</div>',
+                unsafe_allow_html=True)
+    chart_temporal(json.dumps(tp), h=200)
+
+    st.markdown('<div class="sec">Volume by Weekday and Month</div>', unsafe_allow_html=True)
+    chart_by_weekday_month(json.dumps(tp), h=200)
