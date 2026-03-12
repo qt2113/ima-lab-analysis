@@ -18,7 +18,7 @@ class HistoricalDataLoader:
         'finished': 'finished',
         'duration (hours)': 'duration (hours)',
         'item category': 'Category',
-        'name': 'item name(with num)'
+        'item name': 'item name(with num)'
     }
     
     @staticmethod
