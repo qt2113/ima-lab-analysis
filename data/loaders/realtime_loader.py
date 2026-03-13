@@ -8,11 +8,16 @@ from google.oauth2.service_account import Credentials
 
 from config.settings import GOOGLE_SHEET_ID, TARGET_SHEETS
 from config.auth import GoogleAuthConfig
+from config.sheet_config import get_effective_sheet_id, get_effective_sheet_names
 from data.loaders.category_mapper import mapper
 
 
 class RealtimeDataLoader:
     """Realtime data loader."""
+
+    def __init__(self):
+        self.sheet_id = get_effective_sheet_id()
+        self.sheet_names = get_effective_sheet_names()
 
     @staticmethod
     def _strip_number(item_name: str) -> str:
@@ -37,7 +42,7 @@ class RealtimeDataLoader:
         """Fetch one sheet as DataFrame."""
         try:
             client = self._connect_google_sheets()
-            workbook = client.open_by_key(GOOGLE_SHEET_ID)
+            workbook = client.open_by_key(self.sheet_id)
 
             target_sheet = None
             for sheet in workbook.worksheets():
@@ -153,7 +158,7 @@ class RealtimeDataLoader:
     def load(self, sheet_names: list = None) -> pd.DataFrame:
         """Load realtime data from Google Sheets."""
         if sheet_names is None:
-            sheet_names = TARGET_SHEETS
+            sheet_names = self.sheet_names
 
         print("[info] Start fetching realtime data from Google Sheets...")
 

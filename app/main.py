@@ -17,6 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 import streamlit.components.v1 as components
+import re
+
+from config.settings import GOOGLE_SHEET_ID, TARGET_SHEETS
+from config.sheet_config import load_sheet_config, save_sheet_config, clear_sheet_config
 
 st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -66,7 +70,7 @@ footer    { visibility: hidden; }
     flex: 1; min-width: 120px;
     background: #0d0d0d; border: 1px solid #1c1c1c;
     border-radius: 4px; padding: 16px 18px; }
-.kpi-l { font-size: 9px; color: #383838; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 6px; }
+.kpi-l { font-size: 12px; color: #ffffff; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 6px; }
 .kpi-v { font-family: 'Syne', sans-serif; font-size: 30px; font-weight: 800; color: #ccc; line-height: 1; }
 .kpi.hi .kpi-v { color: #e2ff5d; }
 .kpi.bl .kpi-v { color: #60a5fa; }
@@ -75,11 +79,11 @@ footer    { visibility: hidden; }
 
 /* Section headers — WHITE and readable */
 .sec {
-    font-size: 13px; color: #ddd; letter-spacing: .14em;
+    font-size: 15px; color: #ffffff; letter-spacing: .14em;
     text-transform: uppercase; font-weight: 600;
     border-top: 1px solid #1c1c1c; padding-top: 14px;
     margin: 24px 0 6px 0; }
-.sec-note { font-size: 12px; color: #4a4a4a; margin: 0 0 10px 0; }
+.sec-note { font-size: 13px; color: #aaaaaa; margin: 0 0 10px 0; }
 
 /* AI block */
 .ai-block { background: #0a150a; border: 1px solid #1a301a; border-radius: 4px; padding: 16px 18px; margin-top: 10px; }
@@ -297,10 +301,10 @@ const my=d3.median(D,d=>Math.min(d.avg_h,CAP_H));
 g.append('line').attr('x1',x(mx)).attr('x2',x(mx)).attr('y1',0).attr('y2',h).attr('stroke','#222').attr('stroke-dasharray','4,3');
 g.append('line').attr('x1',0).attr('x2',w).attr('y1',y(my)).attr('y2',y(my)).attr('stroke','#222').attr('stroke-dasharray','4,3');
 [['HIGH DEMAND / LONG HOLD',w*.82,h*.08],['FREQUENT / QUICK USE',w*.82,h*.92],
- ['RARE / LONG HOLD',w*.10,h*.08],['LOW ACTIVITY',w*.10,h*.92]].forEach(([t,tx,ty])=>
+  ['RARE / LONG HOLD',w*.10,h*.08],['LOW ACTIVITY',w*.10,h*.92]].forEach(([t,tx,ty])=>
   t.split(' / ').forEach((line,i)=>
-    g.append('text').attr('x',tx).attr('y',ty+i*13).text(line)
-     .attr('fill','#2a2a2a').style('font-size','10px').style('letter-spacing','.07em').attr('text-anchor','middle')));
+    g.append('text').attr('x',tx).attr('y',ty+i*16).text(line)
+     .attr('fill','#ffffff').style('font-size','14px').style('font-weight','600').style('letter-spacing','.05em').attr('text-anchor','middle')));
 g.selectAll('circle').data(D).enter().append('circle')
   .attr('cx',d=>x(Math.min(d.count,CAP_C))).attr('cy',d=>y(Math.min(d.avg_h,CAP_H)))
   .attr('r',d=>d.active?7:3.5)
@@ -413,10 +417,12 @@ items.forEach(item=>{{
   if(!pts.length)return;
   g.append('path').datum(pts)
     .attr('d',d3.line().x(d=>x(d.dt)).y(d=>y(d.count)).curve(d3.curveMonotoneX))
-    .attr('fill','none').attr('stroke',col(item)).attr('stroke-width',1.8).attr('opacity',.72);
+    .attr('fill','none').attr('stroke',col(item)).attr('stroke-width',1.8).attr('opacity',.72)
+    .attr('data-item',item).attr('class','timeline-line');
   g.selectAll(null).data(pts).enter().append('circle')
     .attr('cx',d=>x(d.dt)).attr('cy',d=>y(d.count)).attr('r',3)
     .attr('fill',col(item)).attr('opacity',.88)
+    .attr('data-item',item)
     .on('mousemove',(ev,d)=>showTT(
       `<span style="color:${{col(item)}}">${{item}}</span>\\n`+
       `<span style="color:#555">${{d3.timeFormat('%b %Y')(d.dt)}}</span>  `+
@@ -431,11 +437,18 @@ g.append('g').call(d3.axisLeft(y).ticks(4))
   .selectAll('text').attr('fill','#666').style('font-size','11px');
 g.selectAll('.domain,.tick line').attr('stroke','#1a1a1a');
 items.forEach((item,i)=>{{
-  const lg=svg.append('g').attr('transform',`translate(${{VW-168}},${{M.t+i*19}})`);
-  lg.append('line').attr('x1',0).attr('x2',12).attr('y1',7).attr('y2',7)
-    .attr('stroke',col(item)).attr('stroke-width',2).attr('opacity',.8);
+  const lg=svg.append('g').attr('transform',`translate(${{VW-168}},${{M.t+i*19}})`).style('cursor','pointer');
+  const legendLine=lg.append('line').attr('x1',0).attr('x2',12).attr('y1',7).attr('y2',7)
+    .attr('stroke',col(item)).attr('stroke-width',2).attr('opacity',.8).attr('data-item',item).attr('class','legend-line');
   lg.append('text').attr('x',16).attr('y',11)
     .text(item.length>20?item.slice(0,19)+'…':item).attr('fill','#bbb').style('font-size','10px');
+  lg.on('click',function(){{
+    const isHidden=d3.select('path[data-item="'+item+'"]').attr('opacity')==='0';
+    d3.select('path[data-item="'+item+'"]').transition().duration(200).attr('opacity',isHidden?0.72:0);
+    d3.selectAll('circle[data-item="'+item+'"]').transition().duration(200).attr('opacity',isHidden?0.88:0);
+    legendLine.transition().duration(200).attr('opacity',isHidden?0.8:0.15);
+  }});
+  lg.append('title').text('点击切换显示/隐藏');
 }});
 """, height)
 
@@ -568,15 +581,18 @@ g.selectAll('.domain,.tick line').attr('stroke','#1a1a1a');
 
 
 # ─── Temporal heatmap ─────────────────────────────────
-def chart_temporal_heatmap(heatmap: list, height=280):
+def chart_temporal_heatmap(heatmap: list, height=280, scrollable=False):
+    js_scrollable = "true" if scrollable else "false"
     _chart(f"""
 const D={json.dumps(heatmap)};
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const labelW=46;
-const cs=Math.max(12, Math.floor((VW-labelW-24)/25));
+const cs=Math.max(10, Math.floor((VW-labelW-24)/25));
 const gap=2, unit=cs+gap;
 const topPad=26;
-const svg={_SVG.format(H='VH')};
+const contentH = 7 * unit + topPad + 10;
+const actualH = {js_scrollable} ? Math.max(VH, contentH) : VH;
+const svg=d3.select('#root').append('svg').attr('width', VW).attr('height', actualH);
 const g=svg.append('g').attr('transform',`translate(${{labelW}},${{topPad}})`);
 const maxC=d3.max(D,d=>d.count)||1;
 const col=d3.scaleSequential().domain([0,maxC]).interpolator(d3.interpolate('#111','#e2ff5d'));
@@ -594,7 +610,7 @@ DAYS.forEach((l,i)=>g.append('text').attr('x',-6).attr('y',i*unit+cs-2)
   .text(l).attr('fill','#888').style('font-size','13px').attr('text-anchor','end'));
 [0,4,8,12,16,20,23].forEach(hr=>g.append('text').attr('x',hr*unit+cs/2).attr('y',-6)
   .text(String(hr).padStart(2,'0')+'h').attr('fill','#777').style('font-size','11px').attr('text-anchor','middle'));
-""", height)
+""", height, scrollable=scrollable)
 
 
 # ─── Weekday + Month bars ─────────────────────────────
@@ -703,7 +719,9 @@ with _ha:
         unsafe_allow_html=True)
 
 bounds = analyzer.get_bounds(_src)
-all_bounds = analyzer.get_bounds(None)
+all_bounds = analyzer.get_bounds(None) or {}
+if not all_bounds:
+    all_bounds = {"min": "", "max": ""}
 with _hb:
     _dc1, _dc2, _dc3, _dc4 = st.columns([2, 2, 1, 2])
     with _dc1:
@@ -715,14 +733,109 @@ with _hb:
     with _dc3:
         st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
         if st.button("↻", key="apply", help="Apply date range"):
-            st.cache_data.clear()
+            start_input = _start.strip() if _start else ""
+            end_input = _end.strip() if _end else ""
+            data_min = all_bounds.get('min', '')
+            data_max = all_bounds.get('max', '')
+            errors = []
+            if start_input and data_min:
+                if start_input < data_min:
+                    errors.append(f"开始日期不能早于数据最小日期 ({data_min})")
+            if end_input and data_max:
+                if end_input > data_max:
+                    errors.append(f"结束日期不能晚于数据最大日期 ({data_max})")
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                st.cache_data.clear()
     with _dc4:
         st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
-        if st.button("Reset → All", key="reset_all", help="Reset source + date range"):
-            st.session_state["g_start"] = all_bounds.get("min", "")
-            st.session_state["g_end"] = all_bounds.get("max", "")
-            st.session_state["src_opt"] = "All"
-            st.cache_data.clear()
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button("Reset → All", key="reset_all", help="Reset source + date range"):
+                st.session_state["g_start"] = all_bounds.get("min", "")
+                st.session_state["g_end"] = all_bounds.get("max", "")
+                st.session_state["src_opt"] = "All"
+                st.cache_data.clear()
+        with c2:
+            if st.button("⚙️", key="open_sheet_settings", help="Google Sheet 设置"):
+                st.session_state['show_sheet_settings'] = not st.session_state.get('show_sheet_settings', False)
+
+    if st.session_state.get('show_sheet_settings', False):
+        st.markdown("### ⚙️ Google Sheet 设置")
+        st.info("📧 新Sheet需分享给: qt2113@imalab-2025.iam.gserviceaccount.com")
+        custom_cfg = load_sheet_config()
+        current_id = custom_cfg.get('sheet_id', GOOGLE_SHEET_ID)
+        current_names = custom_cfg.get('sheet_names', TARGET_SHEETS)
+        
+        default_url = f"https://docs.google.com/spreadsheets/d/{current_id}/edit"
+        
+        sheet_url = st.text_input(
+            "Sheet 链接",
+            value=st.session_state.get('custom_sheet_url', default_url),
+            placeholder="https://docs.google.com/spreadsheets/d/...",
+            key="sheet_url_input2"
+        )
+        
+        sheet_names_input = st.text_input(
+            "Sheet名称（逗号分隔）",
+            value=st.session_state.get('custom_sheet_names', ','.join(current_names)),
+            help="多个Sheet用逗号分隔，如: Fall 2025,Spring 2026",
+            key="sheet_names_input2"
+        )
+        
+        col_save, col_reset = st.columns(2)
+        with col_save:
+            if st.button("💾 保存并应用", key="save_sheet_config2", use_container_width=True):
+                match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
+                if match:
+                    new_id = match.group(1)
+                    new_names = [s.strip() for s in sheet_names_input.split(',') if s.strip()]
+                    
+                    st.session_state['custom_sheet_url'] = sheet_url
+                    st.session_state['custom_sheet_names'] = sheet_names_input
+                    
+                    save_sheet_config(new_id, new_names)
+                    
+                    try:
+                        from data.loaders.realtime_loader import load_realtime_data
+                        from data.database import db
+                        df_r = load_realtime_data()
+                        db.insert_data(df_r, source='realtime', replace=True)
+                        st.cache_data.clear()
+                        
+                        if not df_r.empty:
+                            min_date = df_r['Start'].min()
+                            max_date = df_r['Start'].max()
+                            st.session_state["g_start"] = min_date.strftime('%Y-%m-%d')
+                            st.session_state["g_end"] = max_date.strftime('%Y-%m-%d')
+                        
+                        st.success(f"已保存并刷新: {len(df_r)} 条记录")
+                    except Exception as e:
+                        st.success(f"已保存! Sheet ID: {new_id} (刷新失败: {e})")
+                    
+                    st.session_state['show_sheet_settings'] = False
+                    st.rerun()
+                else:
+                    st.error("无效的Sheet链接")
+        
+        with col_reset:
+            if st.button("↺ 恢复默认", key="reset_sheet_config2", use_container_width=True):
+                st.session_state.pop('custom_sheet_url', None)
+                st.session_state.pop('custom_sheet_names', None)
+                clear_sheet_config()
+                st.session_state['show_sheet_settings'] = False
+                st.rerun()
+        
+        if custom_cfg.get('is_custom'):
+            st.caption("✅ 当前使用自定义配置")
+        
+        if st.button("关闭", key="close_sheet_settings"):
+            st.session_state['show_sheet_settings'] = False
+            st.rerun()
+
+        st.markdown("---")
 
 src_label = "All" if _src is None else ("Historical" if _src == "historical" else "Realtime")
 st.caption(
@@ -762,10 +875,12 @@ with tab_ov:
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sec">Monthly Borrow Volume</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">展示每月借用次数，用于观察设备需求的季节性变化和整体使用走势</div>',
+                unsafe_allow_html=True)
     chart_monthly(ov['monthly'], height=240)
 
     st.markdown('<div class="sec">Category Map</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">Box area = total borrows · color depth = median hold duration</div>',
+    st.markdown('<div class="sec-note">矩形面积=该类别总借用次数，颜色深度=中位持有时长（颜色越深表示借用周期越长，可能存在周转问题）</div>',
                 unsafe_allow_html=True)
     chart_treemap(ov['categories'], height=320)
 
@@ -778,15 +893,24 @@ with tab_ov:
 
 # ── FLEET HEALTH ─────────────────────────────────────
 with tab_fleet:
-    fc1, fc2, fc3, _ = st.columns([2, 1, 2, 2])
+    fc1, fc2 = st.columns([2, 3])
     with fc1:
         fh_cat = st.selectbox("Category", ["(All)"] + analyzer.get_categories(),
                               key="fh_cat", label_visibility="collapsed")
     with fc2:
         fh_n = st.slider("Top N", 10, 100, 40, key="fh_n", label_visibility="collapsed")
-    with fc3:
-        sort_by = st.selectbox("Sort by", ["Demand Score", "Utilization", "Frequency"],
-                               key="fh_sort", label_visibility="collapsed")
+
+    st.markdown('<div class="sec">Sort Options</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="sec-note">
+    <b>Demand Score（需求指数）</b>：借用次数 × 利用率的综合得分，反映物品热门程度<br>
+    <b>Utilization（利用率）</b>：借用次数/时间跨度，值越高说明使用越频繁<br>
+    <b>Frequency（借用频次）</b>：仅按借用次数排序，最常被借用的物品
+    </div>
+    """, unsafe_allow_html=True)
+
+    sort_by = st.selectbox("Sort by", ["Demand Score", "Utilization", "Frequency"],
+                           key="fh_sort", label_visibility="collapsed")
 
     sort_map = {"Utilization": "util", "Frequency": "count", "Demand Score": "score"}
     fh = json.loads(analyzer.fleet_health(
@@ -794,7 +918,7 @@ with tab_fleet:
         source=_src, start=_s, end=_e, top_n=fh_n))
 
     st.markdown('<div class="sec">Item Utilization Rate</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">Named items · all borrows counted · ≥2 borrows required · yellow = currently out</div>',
+    st.markdown('<div class="sec-note">统计具名物品（排除捆绑套装）的借用频率，需至少2次借用方可纳入。横轴为借用次数，黄色表示当前正在外借</div>',
                 unsafe_allow_html=True)
     if fh['bars']:
         chart_util_bars(fh['bars'], sort_by=sort_map[sort_by])
@@ -802,10 +926,12 @@ with tab_fleet:
         st.caption("No data.")
 
     st.markdown('<div class="sec">Demand × Hold Duration Quadrant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">Axes capped at 97th percentile · outliers compressed to edge · hover for details</div>',
+    st.markdown('<div class="sec-note">横轴为借用频率，纵轴为平均持有时长。右上象限为高频率长周期（热门急需品），左下象限为低频率短周期（低热度闲置品），辅助采购决策</div>',
                 unsafe_allow_html=True)
     if fh['quadrant']:
         chart_quadrant(fh['quadrant'], fh['p95_h'], fh['p95_count'], height=420)
+    else:
+        st.caption("暂无数据 - 该分类下物品借用数据不足")
 
     ai_button(
         f"Fleet health. Top 8 by demand score: {json.dumps(sorted(fh['bars'],key=lambda x:-(x.get('score',x['count']*x['util'])))[:8])}. "
@@ -836,13 +962,15 @@ with tab_cat:
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sec">Item Frequency & Avg Duration</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">Left = borrow count · Right = avg hold hours · yellow = currently out</div>',
+    st.markdown('<div class="sec-note">左柱为借用次数，右柱为平均持有时长，黄色标注为当前在借物品</div>',
                 unsafe_allow_html=True)
     if cat_d['items']:
         chart_cat_items(cat_d['items'])
 
     if cat_d.get('timeline'):
         st.markdown('<div class="sec">Monthly Borrow Trend — top 10 items</div>',
+                    unsafe_allow_html=True)
+        st.markdown('<div class="sec-note">展示该类别Top 10物品的逐月借用变化，用于对比不同物品的需求走势</div>',
                     unsafe_allow_html=True)
         chart_cat_timeline(cat_d['timeline'], cat_d.get('top10', []), height=300)
 
@@ -903,12 +1031,14 @@ with tab_item:
             </div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="sec">Complete Borrow Timeline</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sec-note">Each bar = one checkout · blue = historical · green = realtime · yellow = active/ongoing</div>',
+        st.markdown('<div class="sec-note">每条横条代表一次借用记录。灰色=历史已归还，绿色=近期数据，黄色=当前仍在借（使用中）</div>',
                     unsafe_allow_html=True)
         chart_gantt(det['gantt'])
 
         if det.get('monthly'):
             st.markdown('<div class="sec">Monthly Hold Hours</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-note">每月累计借用时长的柱状统计，反映设备占用的繁忙程度</div>',
+                        unsafe_allow_html=True)
             chart_monthly_bars(det['monthly'], height=210)
 
         ai_button(
@@ -934,11 +1064,13 @@ with tab_pat:
         source=_src, start=_s, end=_e))
 
     st.markdown('<div class="sec">Borrow Initiation Heatmap</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">Weekday × hour — brighter = more borrows started at that time</div>',
+    st.markdown('<div class="sec-note">横轴为小时(0-23)，纵轴为星期(Mon-Sun)，颜色越亮表示该时段借用越密集。用于分析高峰借用时段，辅助设备补充与人员调度</div>',
                 unsafe_allow_html=True)
-    chart_temporal_heatmap(tp['heatmap'], height=280)
+    chart_temporal_heatmap(tp['heatmap'], height=280, scrollable=True)
 
     st.markdown('<div class="sec">Seasonal Distribution</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">左图为按星期分布，右图为按月份分布，展示借用需求的周期性规律，辅助资源规划</div>',
+                unsafe_allow_html=True)
     chart_wd_month(tp['by_weekday'], tp['by_month'], height=220)
 
     ai_button(
