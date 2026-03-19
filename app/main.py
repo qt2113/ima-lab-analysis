@@ -11,7 +11,7 @@ FIXES IN THIS VERSION:
 4. TEXT: all in-chart labels brightened (#888 → #ccc/#ddd), section headers white
 5. FONTS: section title 13px, sec-note 12px, chart labels 12-13px throughout
 """
-import sys, json
+import sys, json, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -26,7 +26,41 @@ st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
                    initial_sidebar_state="collapsed")
 
 import analyzer
-analyzer._DB = Path(__file__).parent.parent / "item_analysis.db"
+
+DB_DIR = Path(os.getcwd()) / ".streamlit_data"
+DB_DIR.mkdir(parents=True, exist_ok=True)
+analyzer._DB = DB_DIR / "item_analysis.db"
+
+def initialize_data():
+    """页面加载时自动初始化/刷新数据"""
+    import sqlite3
+    from data.database import db
+    
+    conn = sqlite3.connect(str(analyzer._DB))
+    cursor = conn.execute("SELECT COUNT(*) FROM unified_records WHERE source = 'historical'")
+    has_historical = cursor.fetchone()[0] > 0
+    conn.close()
+    
+    if not has_historical:
+        try:
+            from data.loaders.historical_loader import load_historical_data
+            df_historical = load_historical_data()
+            if not df_historical.empty:
+                db.insert_data(df_historical, source='historical', replace=True)
+                st.cache_data.clear()
+        except Exception:
+            pass
+    
+    try:
+        from data.loaders.realtime_loader import load_realtime_data
+        df_realtime = load_realtime_data()
+        if not df_realtime.empty:
+            db.insert_data(df_realtime, source='realtime', replace=True)
+            st.cache_data.clear()
+    except Exception:
+        pass
+
+initialize_data()
 
 # ══════════════════════════════════════════════════════
 # CSS
