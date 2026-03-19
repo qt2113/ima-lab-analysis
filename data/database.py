@@ -217,8 +217,33 @@ class DatabaseManager:
     
     def __del__(self):
         """析构函数，确保连接关闭"""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
-# 全局数据库实例
-db = DatabaseManager()
+# ── Lazy global instance ──────────────────────────────
+# Do NOT call DatabaseManager() here at import time.
+# set_db_path() must be called first (before the path is known).
+# Use get_db() instead of importing `db` directly.
+
+_db_instance = None
+
+def get_db() -> DatabaseManager:
+    """Return the global DatabaseManager, creating it if needed."""
+    global _db_instance
+    if _db_instance is None:
+        _db_instance = DatabaseManager()
+    return _db_instance
+
+# Legacy alias — kept for backward compatibility.
+# Works only AFTER set_db_path() has been called.
+class _LazyDB:
+    """Proxy that forwards all attribute access to the real DatabaseManager."""
+    def __getattr__(self, name):
+        return getattr(get_db(), name)
+    def __bool__(self):
+        return True
+
+db = _LazyDB()

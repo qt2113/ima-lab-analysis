@@ -277,7 +277,7 @@ def get_categories() -> list:
     conn = sqlite3.connect(str(_DB))
     df = pd.read_sql(
         'SELECT "Category", COUNT(*) c FROM unified_records '
-        'WHERE "Category" NOT IN ("nan","Unknown","") '
+        "WHERE \"Category\" NOT IN ('nan','Unknown','') "
         'GROUP BY "Category" ORDER BY c DESC', conn)
     conn.close()
     return [r for r in df['Category'].tolist() if r and str(r) != 'nan']
@@ -298,9 +298,13 @@ def get_items(category=None, source=None) -> list:
 
 def get_bounds(source=None) -> dict:
     conn = sqlite3.connect(str(_DB))
-    where = f'WHERE source="{source}"' if source else ''
-    row = pd.read_sql(
-        f'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records {where}', conn)
+    if source:
+        row = pd.read_sql(
+            'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records WHERE source=?',
+            conn, params=[source])
+    else:
+        row = pd.read_sql(
+            'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records', conn)
     conn.close()
     mn = pd.to_datetime(row['mn'][0], errors='coerce')
     mx = pd.to_datetime(row['mx'][0], errors='coerce')

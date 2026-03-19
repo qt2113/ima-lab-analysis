@@ -31,15 +31,19 @@ DB_DIR = Path(os.getcwd()) / ".streamlit_data"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 analyzer._DB = DB_DIR / "item_analysis.db"
 
-from data.database import DatabaseManager
+# ── CRITICAL: set DB path BEFORE importing db or DatabaseManager ──
+# database.py creates a lazy proxy; the real connection is made on first use.
+# set_db_path() + reset _instance so the next DatabaseManager() uses the right path.
+from data.database import DatabaseManager, get_db
 DatabaseManager._instance = None
 DatabaseManager.set_db_path(analyzer._DB)
 
-from data.database import db
+# Now it's safe to get the db handle
+db = get_db()
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
-    from data.database import db
+    from data.database import get_db; db = get_db()
     
     has_historical = False
     try:
@@ -775,7 +779,7 @@ with st.sidebar:
         with st.spinner("Fetching…"):
             try:
                 from data.loaders.realtime_loader import load_realtime_data
-                from data.database import db
+                from data.database import get_db; db = get_db()
                 df_r = load_realtime_data()
                 db.insert_data(df_r, source='realtime', replace=True)
                 st.success(f"Updated: {len(df_r)} records")
@@ -783,7 +787,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(str(e))
     try:
-        from data.database import db as _db
+        from data.database import get_db; _db = get_db()
         s = _db.get_statistics()
         st.markdown("---")
         st.caption(f"historical  {s['by_source'].get('historical',0):,}")
@@ -886,7 +890,7 @@ with _hb:
                     
                     try:
                         from data.loaders.realtime_loader import load_realtime_data
-                        from data.database import db
+                        from data.database import get_db; db = get_db()
                         df_r = load_realtime_data()
                         db.insert_data(df_r, source='realtime', replace=True)
                         st.cache_data.clear()
