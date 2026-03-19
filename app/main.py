@@ -26,30 +26,17 @@ st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
                    initial_sidebar_state="collapsed")
 
 import analyzer
+from data.database import DatabaseManager, db
 
-DB_DIR = Path(os.getcwd()) / ".streamlit_data"
-DB_DIR.mkdir(parents=True, exist_ok=True)
-analyzer._DB = DB_DIR / "item_analysis.db"
-
-from data.database import DatabaseManager
-
-# 直接写类属性，不依赖 set_db_path 是否存在
-# 旧版 database.py 有 _db_path 类变量，直接赋值即可
-DatabaseManager._db_path = analyzer._DB
-# 关闭旧连接（如果有），下次 __init__ 会用新路径重建
-if DatabaseManager._instance is not None:
-    try:
-        if DatabaseManager._instance._connection is not None:
-            DatabaseManager._instance._connection.close()
-        DatabaseManager._instance._connection = None
-    except Exception:
-        pass
-
-db = DatabaseManager()
+# 让 analyzer 用和 DatabaseManager 相同的数据库路径
+# settings.py 已修复为可写路径，DatabaseManager() 会自动建表
+from config.settings import DATABASE_PATH
+analyzer._DB = DATABASE_PATH
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
     db = DatabaseManager()
+    
     has_historical = False
     try:
         stats = db.get_statistics()
