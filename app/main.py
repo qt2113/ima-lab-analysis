@@ -36,12 +36,19 @@ def initialize_data():
     import sqlite3
     from data.database import db
     
+    db_exists = analyzer._DB.exists()
     conn = sqlite3.connect(str(analyzer._DB))
-    cursor = conn.execute("SELECT COUNT(*) FROM unified_records WHERE source = 'historical'")
-    has_historical = cursor.fetchone()[0] > 0
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unified_records'"
+    )
+    table_exists = cursor.fetchone() is not None
+    has_historical = False
+    if table_exists:
+        cursor = conn.execute("SELECT COUNT(*) FROM unified_records WHERE source = 'historical'")
+        has_historical = cursor.fetchone()[0] > 0
     conn.close()
     
-    if not has_historical:
+    if not db_exists or not has_historical:
         try:
             from data.loaders.historical_loader import load_historical_data
             df_historical = load_historical_data()
