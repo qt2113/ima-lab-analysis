@@ -27,24 +27,25 @@ st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
 
 import analyzer
 
+# ── DB路径：Streamlit Cloud 只有 /tmp 和 cwd 可写 ────
 DB_DIR = Path(os.getcwd()) / ".streamlit_data"
-DB_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    import tempfile
+    DB_DIR = Path(tempfile.gettempdir())
+
 analyzer._DB = DB_DIR / "item_analysis.db"
 
-# ── DB初始化：先设路径，再创建实例 ──────────────────────
-# 必须在任何 from data.database import db 之前完成
+# set_db_path 在新旧两版 database.py 里都有（我们已经加入旧版）
+# 必须在任何 DatabaseManager() 调用之前执行
 from data.database import DatabaseManager
-DatabaseManager._db_path = analyzer._DB   # 直接写属性，不依赖 set_db_path 是否存在
-DatabaseManager._instance = None          # 重置单例，确保下次 DatabaseManager() 用新路径
-if hasattr(DatabaseManager, 'set_db_path'):
-    DatabaseManager.set_db_path(analyzer._DB)
-
-# 现在再实例化，路径已经正确
+DatabaseManager.set_db_path(analyzer._DB)
 db = DatabaseManager()
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
-    from data.database import DatabaseManager; db = DatabaseManager()
+    db = DatabaseManager()
     
     has_historical = False
     try:
@@ -780,7 +781,7 @@ with st.sidebar:
         with st.spinner("Fetching…"):
             try:
                 from data.loaders.realtime_loader import load_realtime_data
-                from data.database import DatabaseManager; db = DatabaseManager()
+                db = DatabaseManager()
                 df_r = load_realtime_data()
                 db.insert_data(df_r, source='realtime', replace=True)
                 st.success(f"Updated: {len(df_r)} records")
@@ -788,7 +789,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(str(e))
     try:
-        from data.database import DatabaseManager; _db = DatabaseManager()
+        db = DatabaseManager()
         s = _db.get_statistics()
         st.markdown("---")
         st.caption(f"historical  {s['by_source'].get('historical',0):,}")
@@ -891,7 +892,7 @@ with _hb:
                     
                     try:
                         from data.loaders.realtime_loader import load_realtime_data
-                        from data.database import DatabaseManager; db = DatabaseManager()
+                        db = DatabaseManager()
                         df_r = load_realtime_data()
                         db.insert_data(df_r, source='realtime', replace=True)
                         st.cache_data.clear()

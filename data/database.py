@@ -15,19 +15,25 @@ class DatabaseManager:
     
     _instance = None
     _connection = None
-    _db_path = None
-    
+    _db_path = None          # 可由外部通过 set_db_path() 覆盖
+
     @classmethod
     def set_db_path(cls, db_path: Path):
-        """设置数据库路径（需要在首次实例化前调用）"""
-        cls._db_path = db_path
-        if cls._instance is not None and cls._instance._connection is not None:
-            cls._instance._connection.close()
+        """设置数据库路径（在首次实例化前调用，或用于切换路径）"""
+        cls._db_path = Path(db_path)
+        # 如果已有实例，关闭旧连接，下次调用时重建
+        if cls._instance is not None:
+            try:
+                if cls._instance._connection is not None:
+                    cls._instance._connection.close()
+            except Exception:
+                pass
             cls._instance._connection = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._connection = None   # 确保实例属性存在
         return cls._instance
     
     def __init__(self):
@@ -35,15 +41,25 @@ class DatabaseManager:
             self._connection = self._create_connection()
             self._initialize_database()
     
-    def _create_connection(self) -> sqlite3.Connection:
+    @staticmethod
+    def _create_connection() -> sqlite3.Connection:
         """创建数据库连接"""
+        # 优先用 set_db_path 指定的路径
         if DatabaseManager._db_path:
-            db_path = DatabaseManager._db_path
+            db_path = Path(DatabaseManager._db_path)
         else:
-            db_path = Path(DATABASE_PATH)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+            # 回退：用可写的临时目录，而不是可能只读的 PROJECT_ROOT
+            import os, tempfile
+            fallback = Path(os.getcwd()) / ".streamlit_data"
+            try:
+                fallback.mkdir(parents=True, exist_ok=True)
+                db_path = fallback / "item_analysis.db"
+            except OSError:
+                db_path = Path(tempfile.gettempdir()) / "ima_lab_item_analysis.db"
         
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        # 优化性能
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
@@ -217,33 +233,8 @@ class DatabaseManager:
     
     def __del__(self):
         """析构函数，确保连接关闭"""
-        try:
-            self.close()
-        except Exception:
-            pass
+        self.close()
 
 
-# ── Lazy global instance ──────────────────────────────
-# Do NOT call DatabaseManager() here at import time.
-# set_db_path() must be called first (before the path is known).
-# Use get_db() instead of importing `db` directly.
-
-_db_instance = None
-
-def get_db() -> DatabaseManager:
-    """Return the global DatabaseManager, creating it if needed."""
-    global _db_instance
-    if _db_instance is None:
-        _db_instance = DatabaseManager()
-    return _db_instance
-
-# Legacy alias — kept for backward compatibility.
-# Works only AFTER set_db_path() has been called.
-class _LazyDB:
-    """Proxy that forwards all attribute access to the real DatabaseManager."""
-    def __getattr__(self, name):
-        return getattr(get_db(), name)
-    def __bool__(self):
-        return True
-
-db = _LazyDB()
+# 全局数据库实例
+db = DatabaseManager()
