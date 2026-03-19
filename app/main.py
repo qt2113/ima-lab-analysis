@@ -31,24 +31,21 @@ DB_DIR = Path(os.getcwd()) / ".streamlit_data"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 analyzer._DB = DB_DIR / "item_analysis.db"
 
+from data.database import DatabaseManager
+DatabaseManager.set_db_path(analyzer._DB)
+
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
-    import sqlite3
     from data.database import db
     
-    db_exists = analyzer._DB.exists()
-    conn = sqlite3.connect(str(analyzer._DB))
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='unified_records'"
-    )
-    table_exists = cursor.fetchone() is not None
     has_historical = False
-    if table_exists:
-        cursor = conn.execute("SELECT COUNT(*) FROM unified_records WHERE source = 'historical'")
-        has_historical = cursor.fetchone()[0] > 0
-    conn.close()
+    try:
+        stats = db.get_statistics()
+        has_historical = stats.get('by_source', {}).get('historical', 0) > 0
+    except Exception:
+        pass
     
-    if not db_exists or not has_historical:
+    if not has_historical:
         try:
             from data.loaders.historical_loader import load_historical_data
             df_historical = load_historical_data()
