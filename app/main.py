@@ -27,26 +27,29 @@ st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
 
 import analyzer
 
-# ── DB路径：Streamlit Cloud 只有 /tmp 和 cwd 可写 ────
 DB_DIR = Path(os.getcwd()) / ".streamlit_data"
-try:
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-except OSError:
-    import tempfile
-    DB_DIR = Path(tempfile.gettempdir())
-
+DB_DIR.mkdir(parents=True, exist_ok=True)
 analyzer._DB = DB_DIR / "item_analysis.db"
 
-# set_db_path 在新旧两版 database.py 里都有（我们已经加入旧版）
-# 必须在任何 DatabaseManager() 调用之前执行
 from data.database import DatabaseManager
-DatabaseManager.set_db_path(analyzer._DB)
+
+# 直接写类属性，不依赖 set_db_path 是否存在
+# 旧版 database.py 有 _db_path 类变量，直接赋值即可
+DatabaseManager._db_path = analyzer._DB
+# 关闭旧连接（如果有），下次 __init__ 会用新路径重建
+if DatabaseManager._instance is not None:
+    try:
+        if DatabaseManager._instance._connection is not None:
+            DatabaseManager._instance._connection.close()
+        DatabaseManager._instance._connection = None
+    except Exception:
+        pass
+
 db = DatabaseManager()
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
     db = DatabaseManager()
-    
     has_historical = False
     try:
         stats = db.get_statistics()
@@ -789,7 +792,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(str(e))
     try:
-        db = DatabaseManager()
+        _db = DatabaseManager()
         s = _db.get_statistics()
         st.markdown("---")
         st.caption(f"historical  {s['by_source'].get('historical',0):,}")
