@@ -32,7 +32,10 @@ DB_DIR.mkdir(parents=True, exist_ok=True)
 analyzer._DB = DB_DIR / "item_analysis.db"
 
 from data.database import DatabaseManager
+DatabaseManager._instance = None
 DatabaseManager.set_db_path(analyzer._DB)
+
+from data.database import db
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""

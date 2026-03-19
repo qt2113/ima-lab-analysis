@@ -21,6 +21,9 @@ class DatabaseManager:
     def set_db_path(cls, db_path: Path):
         """设置数据库路径（需要在首次实例化前调用）"""
         cls._db_path = db_path
+        if cls._instance is not None and cls._instance._connection is not None:
+            cls._instance._connection.close()
+            cls._instance._connection = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -32,8 +35,7 @@ class DatabaseManager:
             self._connection = self._create_connection()
             self._initialize_database()
     
-    @staticmethod
-    def _create_connection() -> sqlite3.Connection:
+    def _create_connection(self) -> sqlite3.Connection:
         """创建数据库连接"""
         if DatabaseManager._db_path:
             db_path = DatabaseManager._db_path
@@ -42,7 +44,6 @@ class DatabaseManager:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        # 优化性能
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
