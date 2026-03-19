@@ -1112,7 +1112,6 @@ g.selectAll('.tick line').attr('stroke','#181818');
 """, iframe_h, scrollable=True)
 
 
-# ─── Monthly bars ─────────────────────────────────────
 def chart_monthly_bars(monthly: list, height=190):
     _chart(f"""
 const D={json.dumps(monthly)};
@@ -1489,6 +1488,7 @@ with tab_item:
         st.markdown('<div class="sec-note">Each bar = one checkout · scroll to see all records</div>',
                     unsafe_allow_html=True)
         chart_gantt(det['gantt'])
+
 
         if det.get('monthly'):
             st.markdown('<div class="sec">Monthly Hold Hours</div>', unsafe_allow_html=True)

@@ -536,6 +536,51 @@ g.selectAll('.tick line').attr('stroke','#1a1a1a');
 
 
 # ─── Monthly bars ─────────────────────────────────────
+# ─── Calendar Heatmap ─────────────────────────────────
+def chart_heatmap(gantt: list, height=220):
+    """日历热力图 - 按天展示借用频率"""
+    if not gantt:
+        st.markdown("<p style='color:#333;padding:20px;font-size:13px'>No records found.</p>",
+                    unsafe_allow_html=True)
+        return
+    
+    _chart(f"""
+const D={json.dumps(gantt)};
+if(!D || !D.length) {{
+  document.body.innerHTML = '<p style="color:#444;padding:40px;font-family:monospace">No borrow data</p>';
+}} else {{
+const dayMap={{}};
+D.forEach(d=>{{if(!d.start)return;const date=d.start.split('T')[0];if(!dayMap[date])dayMap[date]={{c:0,h:0,r:[]}};dayMap[date].c++;if(d.hours)dayMap[date].h+=d.hours;dayMap[date].r.push(d)}});
+const dates=Object.keys(dayMap).sort();
+if(!dates.length) {{
+  document.body.innerHTML = '<p style="color:#444;padding:40px;font-family:monospace">No valid dates</p>';
+}} else {{
+const sD=new Date(dates[0]);
+const eD=new Date(dates[dates.length-1]);
+const c=12,gap=3;
+const sW=new Date(sD);sW.setDate(sW.getDate()-sW.getDay());
+const tD=Math.ceil((eD-sW)/86400000)+1;
+const tW=Math.ceil(tD/7);
+const lW=30,mT=26,mB=40;
+const sVW=Math.max(tW*(c+gap)+lW+20,VW);
+const sVH=7*(c+gap)+mT+mB;
+const svg=d3.select('#root').append('svg').attr('viewBox',`0 0 ${{sVW}} ${{sVH}}`).attr('preserveAspectRatio','xMidYMid meet');
+const maxC=d3.max(Object.values(dayMap),d=>d.c)||1;
+const clr=d3.scaleQuantize().domain([0,maxC]).range(['#161b22','#0e4429','#006d32','#26a641']);
+const g2=svg.append('g').attr('transform',`translate(${{lW}},${{mT}})`);
+const wds=[[0,'Sun'],[2,'Mon'],[4,'Tue'],[6,'Wed']];
+wds.forEach(([i,n])=>{{svg.append('text').attr('x',lW-4).attr('y',mT+i/2*(c+gap)+c/2+4).text(n).attr('fill','#555').style('font-size','10px').attr('text-anchor','end')}});
+const today=new Date();
+for(let w=0;w<tW;w++){{for(let d=0;d<7;d++){{const dD=new Date(sW);dD.setDate(dD.getDate()+w*7+d);const ds=dD.toISOString().split('T')[0];const info=dayMap[ds];const inR=dD>=sD&&dD<=eD;const isF=dD>today;const fill=info?clr(info.c):(inR&&!isF?'#1c1c1c':'transparent');const op=isF?0.3:(info?1:0.5);g2.append('rect').attr('x',w*(c+gap)).attr('y',d*(c+gap)).attr('width',c).attr('height',c).attr('rx',2).attr('fill',fill).attr('opacity',op).attr('stroke',inR&&!isF?'#252525':'none').attr('stroke-width',0.5).on('mouseover',function(ev){{if(!info)return;const hrs=info.h.toFixed(1);const rec=info.r.length===1?info.r[0].start.replace('T',' '):info.r.length+' borrows';showTT('<span style="color:#888">'+ds+'</span> <span style="color:#26a641">'+info.c+'</span> <span style="color:#666">'+hrs+'h</span> <span style="color:#444;font-size:10px">'+rec+'</span>',ev)}}).on('mouseout',hideTT)}}}}
+const months=d3.timeMonths(sD,eD);
+months.forEach(m=>{{const wN=Math.floor((m-sW)/7);svg.append('text').attr('x',lW+wN*(c+gap)).attr('y',sVH-12).text(d3.timeFormat('%b')(m)).attr('fill','#555').style('font-size','10px')}});
+const lX=sVW-110;
+[['0','#161b22'],['1','#0e4429'],['2','#006d32'],['3+','#26a641']].forEach(([l,c],i)=>{{svg.append('rect').attr('x',lX+i*26).attr('y',sVH-12).attr('width',9).attr('height',9).attr('rx',2).attr('fill',c)}});
+svg.append('text').attr('x',lX-6).attr('y',sVH-4).text('borrows').attr('fill','#555').style('font-size','9px');
+}}}}
+""", height, False)
+
+
 def chart_monthly_bars(monthly: list, height=210):
     try:
         json.dumps(monthly)
@@ -1030,10 +1075,23 @@ with tab_item:
                   {'● OUT' if active else '✓  IN'}</div></div>
             </div>""", unsafe_allow_html=True)
 
-        st.markdown('<div class="sec">Complete Borrow Timeline</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sec-note">每条横条代表一次借用记录。灰色=历史已归还，绿色=近期数据，黄色=当前仍在借（使用中）</div>',
-                    unsafe_allow_html=True)
-        chart_gantt(det['gantt'])
+        st.markdown('<div class="sec">Borrow Timeline</div>', unsafe_allow_html=True)
+        vc1, vc2 = st.columns([1, 4])
+        with vc1:
+            view_opt = st.radio(
+                "View",
+                ["Gantt", "Heatmap"],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+        if view_opt == "Gantt":
+            st.markdown('<div class="sec-note">每条横条代表一次借用记录。灰色=历史已归还，绿色=近期数据，黄色=当前仍在借（使用中）</div>',
+                        unsafe_allow_html=True)
+            chart_gantt(det['gantt'])
+        else:
+            st.markdown('<div class="sec-note">颜色深浅表示借用频率，悬停查看详情</div>',
+                        unsafe_allow_html=True)
+            chart_heatmap(det['gantt'], height=220)
 
         if det.get('monthly'):
             st.markdown('<div class="sec">Monthly Hold Hours</div>', unsafe_allow_html=True)
