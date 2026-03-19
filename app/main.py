@@ -31,19 +31,20 @@ DB_DIR = Path(os.getcwd()) / ".streamlit_data"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 analyzer._DB = DB_DIR / "item_analysis.db"
 
-# ── CRITICAL: set DB path BEFORE importing db or DatabaseManager ──
-# database.py creates a lazy proxy; the real connection is made on first use.
-# set_db_path() + reset _instance so the next DatabaseManager() uses the right path.
-from data.database import DatabaseManager, get_db
-DatabaseManager._instance = None
-DatabaseManager.set_db_path(analyzer._DB)
+# ── DB初始化：先设路径，再创建实例 ──────────────────────
+# 必须在任何 from data.database import db 之前完成
+from data.database import DatabaseManager
+DatabaseManager._db_path = analyzer._DB   # 直接写属性，不依赖 set_db_path 是否存在
+DatabaseManager._instance = None          # 重置单例，确保下次 DatabaseManager() 用新路径
+if hasattr(DatabaseManager, 'set_db_path'):
+    DatabaseManager.set_db_path(analyzer._DB)
 
-# Now it's safe to get the db handle
-db = get_db()
+# 现在再实例化，路径已经正确
+db = DatabaseManager()
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
-    from data.database import get_db; db = get_db()
+    from data.database import DatabaseManager; db = DatabaseManager()
     
     has_historical = False
     try:
@@ -779,7 +780,7 @@ with st.sidebar:
         with st.spinner("Fetching…"):
             try:
                 from data.loaders.realtime_loader import load_realtime_data
-                from data.database import get_db; db = get_db()
+                from data.database import DatabaseManager; db = DatabaseManager()
                 df_r = load_realtime_data()
                 db.insert_data(df_r, source='realtime', replace=True)
                 st.success(f"Updated: {len(df_r)} records")
@@ -787,7 +788,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(str(e))
     try:
-        from data.database import get_db; _db = get_db()
+        from data.database import DatabaseManager; _db = DatabaseManager()
         s = _db.get_statistics()
         st.markdown("---")
         st.caption(f"historical  {s['by_source'].get('historical',0):,}")
@@ -890,7 +891,7 @@ with _hb:
                     
                     try:
                         from data.loaders.realtime_loader import load_realtime_data
-                        from data.database import get_db; db = get_db()
+                        from data.database import DatabaseManager; db = DatabaseManager()
                         df_r = load_realtime_data()
                         db.insert_data(df_r, source='realtime', replace=True)
                         st.cache_data.clear()
