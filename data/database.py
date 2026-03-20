@@ -44,18 +44,13 @@ class DatabaseManager:
     @staticmethod
     def _create_connection() -> sqlite3.Connection:
         """创建数据库连接"""
-        # 优先用 set_db_path 指定的路径
+        # 优先级：set_db_path() > settings.DATABASE_PATH > /tmp fallback
         if DatabaseManager._db_path:
             db_path = Path(DatabaseManager._db_path)
         else:
-            # 回退：用可写的临时目录，而不是可能只读的 PROJECT_ROOT
-            import os, tempfile
-            fallback = Path(os.getcwd()) / ".streamlit_data"
-            try:
-                fallback.mkdir(parents=True, exist_ok=True)
-                db_path = fallback / "item_analysis.db"
-            except OSError:
-                db_path = Path(tempfile.gettempdir()) / "ima_lab_item_analysis.db"
+            # 直接用 settings.py 里已经处理好写权限的路径
+            # 这样和 analyzer._DB = DATABASE_PATH 保持同一个文件
+            db_path = Path(DATABASE_PATH)
         
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)

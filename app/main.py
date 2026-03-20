@@ -26,11 +26,11 @@ st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
                    initial_sidebar_state="collapsed")
 
 import analyzer
+from config.settings import DATABASE_PATH
 from data.database import DatabaseManager, db
 
-# 让 analyzer 用和 DatabaseManager 相同的数据库路径
-# settings.py 已修复为可写路径，DatabaseManager() 会自动建表
-from config.settings import DATABASE_PATH
+# analyzer 和 DatabaseManager 都用同一个 DATABASE_PATH
+# settings.py 已处理 Streamlit Cloud 只读问题（自动 fallback 到 /tmp）
 analyzer._DB = DATABASE_PATH
 
 def initialize_data():
