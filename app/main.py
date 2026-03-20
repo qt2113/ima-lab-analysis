@@ -36,9 +36,11 @@ def initialize_data():
     db = DatabaseManager()
     
     has_historical = False
+    has_realtime = False
     try:
         stats = db.get_statistics()
         has_historical = stats.get('by_source', {}).get('historical', 0) > 0
+        has_realtime = stats.get('by_source', {}).get('realtime', 0) > 0
     except Exception:
         pass
     
@@ -52,14 +54,15 @@ def initialize_data():
         except Exception:
             pass
     
-    try:
-        from data.loaders.realtime_loader import load_realtime_data
-        df_realtime = load_realtime_data()
-        if not df_realtime.empty:
-            db.insert_data(df_realtime, source='realtime', replace=True)
-            st.cache_data.clear()
-    except Exception:
-        pass
+    if not has_realtime:
+        try:
+            from data.loaders.realtime_loader import load_realtime_data
+            df_realtime = load_realtime_data()
+            if not df_realtime.empty:
+                db.insert_data(df_realtime, source='realtime', replace=True)
+                st.cache_data.clear()
+        except Exception:
+            pass
 
 initialize_data()
 
