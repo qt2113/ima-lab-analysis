@@ -1,9 +1,10 @@
 """Google Sheet 动态配置管理"""
+import os
 import toml
 from pathlib import Path
 from typing import List, Optional
 
-CONFIG_FILE = Path(".streamlit/secrets.toml")
+CONFIG_FILE = Path("/tmp/ima_lab_sheet_config.toml")
 
 def load_sheet_config() -> dict:
     """读取配置：优先用户自定义，其次默认"""
