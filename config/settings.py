@@ -11,7 +11,8 @@ DATABASE_PATH = PROJECT_ROOT / "item_analysis.db" if os.access(str(PROJECT_ROOT)
 
 # ==================== Google Sheets 配置 ====================
 #GOOGLE_SHEET_ID = "1gMibpWSaxtfPyTq4FJ8wqdpE0ZMrWgEhmP-ReApwg-4"
-GOOGLE_SHEET_ID = "1odR-dpvkPfPuCH5Qh0YGbgREgi-a75uR3NSnUjtkDlo"
+#GOOGLE_SHEET_ID = "1odR-dpvkPfPuCH5Qh0YGbgREgi-a75uR3NSnUjtkDlo"
+GOOGLE_SHEET_ID = "1MLpgJggmnWTlD301bcnletyt9sKlAzJQoshqn7v2fgY"
 TARGET_SHEETS = ["Fall 2025", "Spring 2026"]  # 要抓取的Sheet名称
 
 # ==================== 数据文件配置 ====================
