@@ -878,22 +878,23 @@ with _hb:
                     
                     save_sheet_config(new_id, new_names)
                     
-                    try:
-                        from data.loaders.realtime_loader import load_realtime_data
-                        db = DatabaseManager()
-                        df_r = load_realtime_data()
-                        db.insert_data(df_r, source='realtime', replace=True)
-                        st.cache_data.clear()
-                        
-                        if not df_r.empty:
-                            min_date = df_r['Start'].min()
-                            max_date = df_r['Start'].max()
-                            st.session_state["g_start"] = min_date.strftime('%Y-%m-%d')
-                            st.session_state["g_end"] = max_date.strftime('%Y-%m-%d')
-                        
-                        st.success(f"已保存并刷新: {len(df_r)} 条记录")
-                    except Exception as e:
-                        st.success(f"已保存! Sheet ID: {new_id} (刷新失败: {e})")
+                    with st.spinner("⏳ 正在从Google Sheets加载数据，请稍候..."):
+                        try:
+                            from data.loaders.realtime_loader import load_realtime_data
+                            db = DatabaseManager()
+                            df_r = load_realtime_data()
+                            db.insert_data(df_r, source='realtime', replace=True)
+                            st.cache_data.clear()
+                            
+                            if not df_r.empty:
+                                min_date = df_r['Start'].min()
+                                max_date = df_r['Start'].max()
+                                st.session_state["g_start"] = min_date.strftime('%Y-%m-%d')
+                                st.session_state["g_end"] = max_date.strftime('%Y-%m-%d')
+                            
+                            st.success(f"✅ 已保存并刷新: {len(df_r)} 条记录")
+                        except Exception as e:
+                            st.success(f"已保存! Sheet ID: {new_id} (刷新失败: {e})")
                     
                     st.session_state['show_sheet_settings'] = False
                     st.rerun()
