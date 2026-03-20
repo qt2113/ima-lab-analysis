@@ -297,16 +297,19 @@ def get_items(category=None, source=None) -> list:
 
 
 def get_bounds(source=None) -> dict:
-    conn = sqlite3.connect(str(_DB))
-    if source:
-        row = pd.read_sql(
-            'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records WHERE source=?',
-            conn, params=[source])
-    else:
-        row = pd.read_sql(
-            'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records', conn)
-    conn.close()
-    mn = pd.to_datetime(row['mn'][0], errors='coerce')
-    mx = pd.to_datetime(row['mx'][0], errors='coerce')
-    return {'min': mn.strftime('%Y-%m-%d') if pd.notna(mn) else '',
-            'max': mx.strftime('%Y-%m-%d') if pd.notna(mx) else ''}
+    try:
+        conn = sqlite3.connect(str(_DB))
+        if source:
+            row = pd.read_sql(
+                'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records WHERE source=?',
+                conn, params=[source])
+        else:
+            row = pd.read_sql(
+                'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records', conn)
+        conn.close()
+        mn = pd.to_datetime(row['mn'][0], errors='coerce') if not row.empty else pd.NaT
+        mx = pd.to_datetime(row['mx'][0], errors='coerce') if not row.empty else pd.NaT
+        return {'min': mn.strftime('%Y-%m-%d') if pd.notna(mn) else '',
+                'max': mx.strftime('%Y-%m-%d') if pd.notna(mx) else ''}
+    except Exception:
+        return {'min': '', 'max': ''}

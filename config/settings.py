@@ -7,7 +7,7 @@ from pathlib import Path
 # ==================== 路径配置 ====================
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-DATABASE_PATH = PROJECT_ROOT / "item_analysis.db" if os.access(str(PROJECT_ROOT), os.W_OK) else Path(os.environ.get("TMPDIR", "/tmp")) / "ima_lab.db"
+DATABASE_PATH = PROJECT_ROOT / "item_analysis.db" if os.access(str(PROJECT_ROOT), os.W_OK) else Path(os.environ.get("TMPDIR", "/tmp")) / "item_analysis.db"
 
 # ==================== Google Sheets 配置 ====================
 #GOOGLE_SHEET_ID = "1gMibpWSaxtfPyTq4FJ8wqdpE0ZMrWgEhmP-ReApwg-4"
