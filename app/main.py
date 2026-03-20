@@ -29,9 +29,7 @@ import analyzer
 from config.settings import DATABASE_PATH
 from data.database import DatabaseManager, db
 
-# analyzer 和 DatabaseManager 都用同一个 DATABASE_PATH
-# settings.py 已处理 Streamlit Cloud 只读问题（自动 fallback 到 /tmp）
-analyzer._DB = DATABASE_PATH
+analyzer._DB = db.connection.execute("PRAGMA database_list").fetchone()[2]
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
