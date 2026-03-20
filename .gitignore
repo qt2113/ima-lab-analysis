@@ -15,9 +15,11 @@ service-account-key.json
 *.xlsx
 *.xls
 *.csv
-historical_raw_data.xlsx
+!historical_raw_data.xlsx
+!checkouts-2026-01-30.xlsx
+!2025 checkouts-2026-02-09.xlsx
+!code_to_category_map.xlsx
 realtime_raw_log*.xlsx
-code_to_category_map.xlsx
 
 # ==================== Python ====================
 __pycache__/
