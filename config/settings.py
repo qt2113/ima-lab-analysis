@@ -67,3 +67,18 @@ DATE_FORMATS = {
     "realtime": '%m/%d/%Y %H:%M:%S',
     "historical": ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S']
 }
+
+# ==================== AI 配置 ====================
+AI_PROVIDER = os.getenv("AI_PROVIDER", "cloudflare")
+
+# Cloudflare Workers AI
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CLOUDFLARE_MODEL_CHAT = "@cf/meta/llama-3.2-1b-instruct"
+CLOUDFLARE_MODEL_ANALYSIS = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+# Groq (备选)
+GROQ_MODEL_CHAT = "llama-4-scout-17b-16e-instruct"
+GROQ_MODEL_ANALYSIS = "llama-3.3-70b-versatile"
+
+MAX_CHAT_HISTORY = 10

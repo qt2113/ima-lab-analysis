@@ -23,13 +23,52 @@ from config.settings import GOOGLE_SHEET_ID, TARGET_SHEETS
 from config.sheet_config import load_sheet_config, save_sheet_config, clear_sheet_config
 
 st.set_page_config(page_title="IMA Lab", page_icon="◈", layout="wide",
-                   initial_sidebar_state="collapsed")
+                   initial_sidebar_state="expanded")
 
 import analyzer
 from config.settings import DATABASE_PATH
 from data.database import DatabaseManager, db
+from ai.client import get_ai_client
+from ai.chat import init_chat_state, add_message, get_conversation_history, clear_chat_history, get_history_count
+from ai.prompts import QUICK_QUESTIONS
+from config.settings import CLOUDFLARE_MODEL_CHAT, CLOUDFLARE_MODEL_ANALYSIS, AI_PROVIDER
 
 analyzer._DB = db.connection.execute("PRAGMA database_list").fetchone()[2]
+
+# ── CACHED WRAPPERS ───────────────────────────────────
+# Without these, every slider/dropdown triggers a full DB query + pandas parse.
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_bounds(source):
+    return analyzer.get_bounds(source)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_categories():
+    return analyzer.get_categories()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_items(category, source):
+    return analyzer.get_items(category=category, source=source)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_overview(source, start, end):
+    return analyzer.overview(source=source, start=start, end=end)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_fleet(category, source, start, end, top_n):
+    return analyzer.fleet_health(category=category, source=source, start=start, end=end, top_n=top_n)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_category(cat, source, start, end):
+    return analyzer.category_analysis(cat, source=source, start=start, end=end)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_item(item, start, end, match_base):
+    return analyzer.item_detail(item, start=start, end=end, match_base=match_base)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_patterns(category, source, start, end):
+    return analyzer.temporal_patterns(category=category, source=source, start=start, end=end)
+
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
@@ -64,7 +103,9 @@ def initialize_data():
         except Exception:
             pass
 
-initialize_data()
+if not st.session_state.get('_data_initialized'):
+    initialize_data()
+    st.session_state['_data_initialized'] = True
 
 # ══════════════════════════════════════════════════════
 # CSS
@@ -73,7 +114,8 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=JetBrains+Mono:wght@300;400;600&display=swap');
 
-html, [class*="css"] { font-family: 'JetBrains Mono', monospace !important; }
+html, [data-testid="stSidebar"], [class*="css"] { font-family: 'JetBrains Mono', monospace !important; }
+[data-testid="stSidebar"] { display: flex !important; visibility: visible !important; }
 #MainMenu { visibility: hidden; }
 footer    { visibility: hidden; }
 [data-testid="stToolbar"] { visibility: hidden; }
@@ -741,20 +783,21 @@ def ai_button(prompt: str, key: str):
     if clicked:
         with st.spinner("Analyzing…"):
             try:
-                import anthropic
-                client = anthropic.Anthropic()
-                msg = client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                client = get_ai_client()
+                messages = [{"role": "user", "content": prompt}]
+                text = client.chat(
+                    messages=messages,
+                    model=CLOUDFLARE_MODEL_ANALYSIS,
                     max_tokens=350,
-                    messages=[{"role": "user", "content": prompt}]
                 )
-                text = msg.content[0].text
                 st.markdown(
                     f'<div class="ai-block"><div class="ai-lbl">◈ AI Insight</div>'
                     f'<div class="ai-text">{text}</div></div>',
                     unsafe_allow_html=True)
+            except ValueError as e:
+                st.error(f"请先配置 API Key: {e}")
             except ImportError:
-                st.error("Run: pip install anthropic")
+                st.error("Run: pip install requests")
             except Exception as e:
                 st.error(f"API error: {e}")
 
@@ -788,6 +831,69 @@ with st.sidebar:
     except Exception:
         pass
 
+    st.markdown("---")
+
+    with st.expander("💬 AI 助手", expanded=True):
+        init_chat_state()
+
+        st.markdown("**快捷问题**")
+        cols = st.columns(2)
+        for i, q in enumerate(QUICK_QUESTIONS[:4]):
+            with cols[i % 2]:
+                if st.button(q, key=f"q_{i}", use_container_width=True):
+                    st.session_state.ai_input = q
+
+        st.markdown("---")
+
+        chat_container = st.container()
+        with chat_container:
+            messages = [m for m in st.session_state.get("chat_messages", [])[1:] 
+                       if m["role"] in ("user", "assistant")]
+            for msg in messages[-10:]:
+                if msg["role"] == "user":
+                    st.markdown(f"**👤** {msg['content']}")
+                else:
+                    st.markdown(f"**🤖** {msg['content']}")
+                st.markdown("")
+
+        user_input = st.text_input(
+            "输入问题...", 
+            key="ai_input",
+            placeholder="问我任何关于设备借用的问题",
+        )
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            send_clicked = st.button("发送 ➤", use_container_width=True)
+        with col2:
+            if st.button("清空", use_container_width=True):
+                clear_chat_history()
+                st.rerun()
+
+        if send_clicked and user_input:
+            add_message("user", user_input)
+            
+            try:
+                client = get_ai_client()
+                messages = get_conversation_history(max_turns=10)
+                with st.spinner("AI 思考中..."):
+                    response = client.chat(
+                        messages=messages,
+                        model=CLOUDFLARE_MODEL_CHAT,
+                        max_tokens=512,
+                    )
+                add_message("assistant", response)
+                st.rerun()
+            except ValueError as e:
+                st.error(f"请先配置 API Key: {e}")
+            except Exception as e:
+                st.error(f"请求失败: {e}")
+                add_message("assistant", "抱歉，AI 服务暂时不可用，请稍后重试。")
+                st.rerun()
+
+        if get_history_count() > 0:
+            st.caption(f"对话记录: {get_history_count()} 条")
+
 
 # ══════════════════════════════════════════════════════
 # HEADER + GLOBAL DATE RANGE
@@ -801,8 +907,8 @@ with _ha:
         "EQUIPMENT BORROWING INTELLIGENCE</p>",
         unsafe_allow_html=True)
 
-bounds = analyzer.get_bounds(_src)
-all_bounds = analyzer.get_bounds(None) or {}
+bounds = _cached_bounds(_src)
+all_bounds = _cached_bounds(None) or {}
 if not all_bounds:
     all_bounds = {"min": "", "max": ""}
 with _hb:
@@ -944,7 +1050,7 @@ tab_ov, tab_fleet, tab_cat, tab_item, tab_pat = st.tabs([
 
 # ── OVERVIEW ─────────────────────────────────────────
 with tab_ov:
-    ov = json.loads(analyzer.overview(source=_src, start=_s, end=_e))
+    ov = json.loads(_cached_overview(_src, _s, _e))
     k  = ov['kpi']
     st.markdown(f"""
     <div class="kpi-row">
@@ -979,7 +1085,7 @@ with tab_ov:
 with tab_fleet:
     fc1, fc2 = st.columns([2, 3])
     with fc1:
-        fh_cat = st.selectbox("Category", ["(All)"] + analyzer.get_categories(),
+        fh_cat = st.selectbox("Category", ["(All)"] + _cached_categories(),
                               key="fh_cat", label_visibility="collapsed")
     with fc2:
         fh_n = st.slider("Top N", 10, 100, 40, key="fh_n", label_visibility="collapsed")
@@ -997,9 +1103,9 @@ with tab_fleet:
                            key="fh_sort", label_visibility="collapsed")
 
     sort_map = {"Utilization": "util", "Frequency": "count", "Demand Score": "score"}
-    fh = json.loads(analyzer.fleet_health(
-        category=None if fh_cat.startswith("(") else fh_cat,
-        source=_src, start=_s, end=_e, top_n=fh_n))
+    fh = json.loads(_cached_fleet(
+        None if fh_cat.startswith("(") else fh_cat,
+        _src, _s, _e, fh_n))
 
     st.markdown('<div class="sec">Item Utilization Rate</div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-note">统计具名物品（排除捆绑套装）的借用频率，需至少2次借用方可纳入。横轴为借用次数，黄色表示当前正在外借</div>',
@@ -1027,10 +1133,10 @@ with tab_fleet:
 with tab_cat:
     cc1, _ = st.columns([2, 5])
     with cc1:
-        sel_cat = st.selectbox("Category", analyzer.get_categories(),
+        sel_cat = st.selectbox("Category", _cached_categories(),
                                key="cat_sel", label_visibility="collapsed")
 
-    cat_d      = json.loads(analyzer.category_analysis(sel_cat, source=_src, start=_s, end=_e))
+    cat_d      = json.loads(_cached_category(sel_cat, _src, _s, _e))
     n_items    = len(cat_d['items'])
     active_n   = sum(1 for x in cat_d['items'] if x.get('active'))
     tot_borrow = sum(x['count'] for x in cat_d['items'])
@@ -1068,12 +1174,12 @@ with tab_cat:
 with tab_item:
     ic1, ic2 = st.columns([1, 2])
     with ic1:
-        item_cat = st.selectbox("Category", ["(All)"] + analyzer.get_categories(),
+        item_cat = st.selectbox("Category", ["(All)"] + _cached_categories(),
                                 key="item_cat", label_visibility="collapsed")
     with ic2:
-        all_items = analyzer.get_items(
-            category=None if item_cat == "(All)" else item_cat,
-            source=_src)
+        all_items = _cached_items(
+            None if item_cat == "(All)" else item_cat,
+            _src)
         q_txt = st.text_input("Search item", placeholder="filter by name…",
                               key="item_q", label_visibility="collapsed")
         filtered = [i for i in all_items if q_txt.lower() in i.lower()] if q_txt else all_items
@@ -1088,7 +1194,7 @@ with tab_item:
             key="item_match_base",
             help="推荐开启：把同型号不同编号（如 012/013/017）合并到同一条时间线里。",
         )
-        det = json.loads(analyzer.item_detail(sel_item, start=_s, end=_e, match_base=match_base))
+        det = json.loads(_cached_item(sel_item, _s, _e, match_base))
         s   = det['stats']
 
         if s:
@@ -1153,12 +1259,12 @@ with tab_item:
 with tab_pat:
     pc1, _ = st.columns([2, 5])
     with pc1:
-        pat_cat = st.selectbox("Category", ["(All)"] + analyzer.get_categories(),
+        pat_cat = st.selectbox("Category", ["(All)"] + _cached_categories(),
                                key="pat_cat", label_visibility="collapsed")
 
-    tp = json.loads(analyzer.temporal_patterns(
-        category=None if pat_cat == "(All)" else pat_cat,
-        source=_src, start=_s, end=_e))
+    tp = json.loads(_cached_patterns(
+        None if pat_cat == "(All)" else pat_cat,
+        _src, _s, _e))
 
     st.markdown('<div class="sec">Borrow Initiation Heatmap</div>', unsafe_allow_html=True)
     st.markdown('<div class="sec-note">横轴为小时(0-23)，纵轴为星期(Mon-Sun)，颜色越亮表示该时段借用越密集。用于分析高峰借用时段，辅助设备补充与人员调度</div>',

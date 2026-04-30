@@ -24,7 +24,14 @@ def _strip_number(name: str) -> str:
 
 
 def _load(category=None, source=None, start=None, end=None) -> pd.DataFrame:
-    conn = sqlite3.connect(str(_DB))
+    try:
+        from data.database import db as _singleton
+        conn = _singleton.connection
+        close_after = False
+    except Exception:
+        conn = sqlite3.connect(str(_DB))
+        close_after = True
+
     conds, params = [], []
     if source:   conds.append("source = ?");      params.append(source)
     if category: conds.append('"Category" = ?');  params.append(category)
@@ -36,7 +43,8 @@ def _load(category=None, source=None, start=None, end=None) -> pd.DataFrame:
         if pd.notna(t): conds.append('"Start" <= ?'); params.append(t.strftime('%Y-%m-%d 23:59:59'))
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     df = pd.read_sql(f"SELECT * FROM unified_records {where}", conn, params=params)
-    conn.close()
+    if close_after:
+        conn.close()
 
     for col in ['Start', 'finished']:
         s = df[col].astype(str).replace({'None': pd.NA, 'nan': pd.NA, 'NaT': pd.NA})
