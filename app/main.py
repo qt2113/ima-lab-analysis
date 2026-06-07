@@ -11,9 +11,13 @@ FIXES IN THIS VERSION:
 4. TEXT: all in-chart labels brightened (#888 → #ccc/#ddd), section headers white
 5. FONTS: section title 13px, sec-note 12px, chart labels 12-13px throughout
 """
-import sys, json, os
+import sys, json, os, logging
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from config.settings import setup_logging
+setup_logging()
+logger = logging.getLogger(__name__)
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -29,7 +33,7 @@ import analyzer
 from config.settings import DATABASE_PATH
 from data.database import DatabaseManager, db
 from ai.client import get_ai_client
-from ai.chat import init_chat_state, add_message, get_conversation_history, clear_chat_history, get_history_count
+from ai.chat import init_chat_state, add_message, get_conversation_history, clear_chat_history, get_history_count, set_system_context, maybe_summarize
 from ai.prompts import QUICK_QUESTIONS
 from config.settings import CLOUDFLARE_MODEL_CHAT, CLOUDFLARE_MODEL_ANALYSIS, AI_PROVIDER
 
@@ -69,7 +73,6 @@ def _cached_item(item, start, end, match_base):
 def _cached_patterns(category, source, start, end):
     return analyzer.temporal_patterns(category=category, source=source, start=start, end=end)
 
-
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
     db = DatabaseManager()
@@ -107,15 +110,30 @@ if not st.session_state.get('_data_initialized'):
     initialize_data()
     st.session_state['_data_initialized'] = True
 
+# ── Inject data context into AI system prompt ─────────
+if not st.session_state.get('_context_injected'):
+    try:
+        _db_ctx = DatabaseManager()
+        _stats = _db_ctx.get_statistics()
+        _cats = analyzer.get_categories()
+        ctx = (
+            f"- 总借用记录: {_stats.get('total', 0):,} 条\n"
+            f"- 历史数据: {_stats.get('by_source', {}).get('historical', 0):,} 条, "
+            f"实时数据: {_stats.get('by_source', {}).get('realtime', 0):,} 条\n"
+            f"- 设备类别数: {len(_cats)} ({', '.join(_cats[:12])}{'...' if len(_cats) > 12 else ''})\n"
+            f"- 当前在借物品: {_stats.get('active_now', 'N/A')} 件"
+        )
+        set_system_context(ctx)
+        st.session_state['_context_injected'] = True
+    except Exception:
+        pass  # silent fail — chat still works without data context
+
 # ══════════════════════════════════════════════════════
 # CSS
 # ══════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=JetBrains+Mono:wght@300;400;600&display=swap');
-
-html, [data-testid="stSidebar"], [class*="css"] { font-family: 'JetBrains Mono', monospace !important; }
-[data-testid="stSidebar"] { display: flex !important; visibility: visible !important; }
+html, [data-testid="stSidebar"], [class*="css"] { font-family: 'Cascadia Code', 'Consolas', 'JetBrains Mono', 'Courier New', monospace !important; }
 #MainMenu { visibility: hidden; }
 footer    { visibility: hidden; }
 [data-testid="stToolbar"] { visibility: hidden; }
@@ -126,11 +144,71 @@ footer    { visibility: hidden; }
     padding-right: 1.4rem !important;
 }
 
-/* Sidebar toggle always visible when collapsed */
-[data-testid="collapsedControl"] {
-    display: flex !important;
-    visibility: visible !important;
-    opacity: 1 !important;
+/* ── Chat social-media bubble style ── */
+.chat-messages {
+    max-height: 400px; overflow-y: auto; padding-right: 6px;
+}
+.chat-messages::-webkit-scrollbar { width: 4px; }
+.chat-messages::-webkit-scrollbar-track { background: transparent; }
+.chat-messages::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
+
+.msg-row { display: flex; margin-bottom: 14px; align-items: flex-end; gap: 8px; }
+.msg-row.user { flex-direction: row-reverse; }
+
+.msg-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; flex-shrink: 0; line-height: 1;
+}
+.msg-avatar.user { background: #1a3a1a; color: #4ade80; }
+.msg-avatar.assistant { background: #1a1a2e; color: #60a5fa; }
+
+.msg-body { max-width: 78%; }
+.msg-name { font-size: 10px; color: #555; margin-bottom: 3px; }
+.msg-row.user .msg-name { text-align: right; }
+
+.msg-bubble {
+    padding: 10px 13px; border-radius: 16px;
+    font-size: 12px; line-height: 1.6; word-break: break-word;
+    position: relative;
+}
+.msg-bubble.user {
+    background: #1a3a1a; color: #c8d8c8;
+    border-bottom-right-radius: 4px;
+}
+.msg-bubble.assistant {
+    background: #1a1a2e; color: #b8c0d0;
+    border-bottom-left-radius: 4px;
+}
+
+/* bubble tail */
+.msg-bubble.user::after {
+    content: ''; position: absolute; bottom: 0; right: -6px;
+    width: 0; height: 0;
+    border-left: 8px solid #1a3a1a;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+}
+.msg-bubble.assistant::after {
+    content: ''; position: absolute; bottom: 0; left: -6px;
+    width: 0; height: 0;
+    border-right: 8px solid #1a1a2e;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+}
+
+.msg-time {
+    font-size: 9px; color: #3a3a3a; margin-top: 4px;
+}
+.msg-row.user .msg-time { text-align: right; }
+
+/* system/divider message */
+.chat-system-msg {
+    text-align: center; margin: 10px 0;
+}
+.chat-system-msg span {
+    font-size: 10px; color: #3a3a3a;
+    background: #0f0f0f; padding: 4px 12px; border-radius: 10px;
 }
 
 /* Tabs */
@@ -151,13 +229,13 @@ footer    { visibility: hidden; }
     background: #0d0d0d; border: 1px solid #1c1c1c;
     border-radius: 4px; padding: 16px 18px; }
 .kpi-l { font-size: 12px; color: #ffffff; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 6px; }
-.kpi-v { font-family: 'Syne', sans-serif; font-size: 30px; font-weight: 800; color: #ccc; line-height: 1; }
+.kpi-v { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; font-size: 30px; font-weight: 800; color: #ccc; line-height: 1; }
 .kpi.hi .kpi-v { color: #e2ff5d; }
 .kpi.bl .kpi-v { color: #60a5fa; }
 .kpi.gr .kpi-v { color: #4ade80; }
 .kpi.sm .kpi-v { font-size: 16px; padding-top: 8px; }
 
-/* Section headers — WHITE and readable */
+/* Section headers */
 .sec {
     font-size: 15px; color: #ffffff; letter-spacing: .14em;
     text-transform: uppercase; font-weight: 600;
@@ -180,7 +258,6 @@ iframe { border: none !important; }
 # This prevents viewBox-scaling from making rendered height > iframe height.
 # ══════════════════════════════════════════════════════
 D3 = "https://d3js.org/d3.v7.min.js"
-
 
 def _chart(js_body: str, height: int, scrollable: bool = False):
     overflow = "auto" if scrollable else "hidden"
@@ -223,10 +300,8 @@ function hideTT() {{ _tt.style.opacity = 0; }}
         height=height + 22,
         scrolling=scrollable)
 
-
 # helper: create SVG with exact pixel dimensions
 _SVG = "d3.select('#root').append('svg').attr('width', VW).attr('height', {H})"
-
 
 # ─── Monthly line ─────────────────────────────────────
 def chart_monthly(monthly: list, height=240):
@@ -263,7 +338,6 @@ g.append('g').call(d3.axisLeft(y).ticks(5))
 g.selectAll('.domain,.tick line').attr('stroke','#1a1a1a');
 """, height)
 
-
 # ─── Category treemap ─────────────────────────────────
 def chart_treemap(categories: list, height=320):
     _chart(f"""
@@ -295,7 +369,6 @@ legend.append('rect').attr('width',140).attr('height',7).attr('rx',2).attr('fill
 legend.append('text').attr('y',19).text('short hold').attr('fill','#3a3a3a').style('font-size','10px');
 legend.append('text').attr('x',140).attr('y',19).attr('text-anchor','end').text('long hold').attr('fill','#3a3a3a').style('font-size','10px');
 """, height)
-
 
 # ─── Utilization bars (scrollable) ────────────────────
 def chart_util_bars(bars: list, sort_by: str = "score"):
@@ -352,7 +425,6 @@ g.append('g').attr('transform',`translate(0,${{h}})`)
 g.selectAll('.domain,.tick line').attr('stroke','#1a1a1a');
 """, iframe_h, scrollable=True)
 
-
 # ─── Quadrant scatter ─────────────────────────────────
 def _quantile(values: list, q: float) -> float:
     s = sorted(v for v in values if v is not None and v == v)
@@ -404,7 +476,6 @@ svg.append('text').attr('x',M.l+w/2).attr('y',VH-6)
 svg.append('text').attr('transform','rotate(-90)').attr('x',-(M.t+h/2)).attr('y',16)
   .text('avg hold (h)').attr('fill','#333').attr('text-anchor','middle').style('font-size','11px').style('letter-spacing','.09em');
 """, height)
-
 
 # ─── Category items dual bar (scrollable) ─────────────
 def chart_cat_items(items: list):
@@ -471,7 +542,6 @@ g.selectAll('rect.hov').data(D).enter().append('rect').attr('class','hov')
   .on('mouseleave',hideTT);
 """, iframe_h, scrollable=True)
 
-
 # ─── Category multi-line timeline ─────────────────────
 def chart_cat_timeline(timeline: list, top10: list, height=300):
     _chart(f"""
@@ -531,7 +601,6 @@ items.forEach((item,i)=>{{
   lg.append('title').text('点击切换显示/隐藏');
 }});
 """, height)
-
 
 # ─── Single item Gantt (scrollable) ───────────────────
 def chart_gantt(gantt: list):
@@ -614,7 +683,6 @@ g.selectAll('.tick line').attr('stroke','#1a1a1a');
 }});
 """, iframe_h, scrollable=True)
 
-
 # ─── Monthly bars ─────────────────────────────────────
 # ─── Calendar Heatmap ─────────────────────────────────
 def chart_heatmap(gantt: list, height=220):
@@ -660,7 +728,6 @@ svg.append('text').attr('x',lX-6).attr('y',sVH-4).text('borrows').attr('fill','#
 }}}}
 """, height, False)
 
-
 def chart_monthly_bars(monthly: list, height=210):
     try:
         json.dumps(monthly)
@@ -704,7 +771,6 @@ g.selectAll('.domain,.tick line').attr('stroke','#1a1a1a');
 }}
 """, height)
 
-
 # ─── Temporal heatmap ─────────────────────────────────
 def chart_temporal_heatmap(heatmap: list, height=280, scrollable=False):
     js_scrollable = "true" if scrollable else "false"
@@ -736,7 +802,6 @@ DAYS.forEach((l,i)=>g.append('text').attr('x',-6).attr('y',i*unit+cs-2)
 [0,4,8,12,16,20,23].forEach(hr=>g.append('text').attr('x',hr*unit+cs/2).attr('y',-6)
   .text(String(hr).padStart(2,'0')+'h').attr('fill','#777').style('font-size','11px').attr('text-anchor','middle'));
 """, height, scrollable=scrollable)
-
 
 # ─── Weekday + Month bars ─────────────────────────────
 def chart_wd_month(by_weekday: list, by_month: list, height=220):
@@ -772,7 +837,6 @@ svg.append('text').attr('x',M.l+hw+40+hw/2).attr('y',VH-4)
   .text('BY MONTH').attr('fill','#333').attr('text-anchor','middle').style('font-size','10px').style('letter-spacing','.12em');
 """, height)
 
-
 # ══════════════════════════════════════════════════════
 # AI BUTTON
 # ══════════════════════════════════════════════════════
@@ -800,7 +864,6 @@ def ai_button(prompt: str, key: str):
                 st.error("Run: pip install requests")
             except Exception as e:
                 st.error(f"API error: {e}")
-
 
 # ══════════════════════════════════════════════════════
 # SIDEBAR
@@ -833,67 +896,96 @@ with st.sidebar:
 
     st.markdown("---")
 
-    with st.expander("💬 AI 助手", expanded=True):
-        init_chat_state()
-
-        st.markdown("**快捷问题**")
+    with st.expander("💬 快捷问题", expanded=False):
         cols = st.columns(2)
         for i, q in enumerate(QUICK_QUESTIONS[:4]):
             with cols[i % 2]:
                 if st.button(q, key=f"q_{i}", use_container_width=True):
                     st.session_state.ai_input = q
 
-        st.markdown("---")
+    st.markdown("---")
 
-        chat_container = st.container()
-        with chat_container:
-            messages = [m for m in st.session_state.get("chat_messages", [])[1:] 
-                       if m["role"] in ("user", "assistant")]
-            for msg in messages[-10:]:
-                if msg["role"] == "user":
-                    st.markdown(f"**👤** {msg['content']}")
-                else:
-                    st.markdown(f"**🤖** {msg['content']}")
-                st.markdown("")
-
-        user_input = st.text_input(
-            "输入问题...", 
-            key="ai_input",
-            placeholder="问我任何关于设备借用的问题",
-        )
-
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            send_clicked = st.button("发送 ➤", use_container_width=True)
-        with col2:
-            if st.button("清空", use_container_width=True):
-                clear_chat_history()
-                st.rerun()
-
-        if send_clicked and user_input:
-            add_message("user", user_input)
-            
-            try:
-                client = get_ai_client()
-                messages = get_conversation_history(max_turns=10)
-                with st.spinner("AI 思考中..."):
-                    response = client.chat(
-                        messages=messages,
-                        model=CLOUDFLARE_MODEL_CHAT,
-                        max_tokens=512,
+    chat_container = st.container()
+    with chat_container:
+        messages = [m for m in st.session_state.get("chat_messages", [])[1:]
+                   if m["role"] in ("user", "assistant")]
+        if messages:
+            msgs_html = '<div class="chat-messages" id="chat-scroll">'
+            for msg in messages[-30:]:
+                role = msg["role"]
+                content = msg["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+                time_str = msg.get("time", "")
+                if role == "user":
+                    msgs_html += (
+                        '<div class="msg-row user">'
+                        '<div class="msg-avatar user">我</div>'
+                        '<div class="msg-body">'
+                        f'<div class="msg-name">你</div>'
+                        f'<div class="msg-bubble user">{content}</div>'
+                        f'<div class="msg-time">{time_str}</div>'
+                        '</div></div>'
                     )
-                add_message("assistant", response)
-                st.rerun()
-            except ValueError as e:
-                st.error(f"请先配置 API Key: {e}")
-            except Exception as e:
-                st.error(f"请求失败: {e}")
-                add_message("assistant", "抱歉，AI 服务暂时不可用，请稍后重试。")
-                st.rerun()
+                else:
+                    msgs_html += (
+                        '<div class="msg-row assistant">'
+                        '<div class="msg-avatar assistant">AI</div>'
+                        '<div class="msg-body">'
+                        f'<div class="msg-name">IMA AI</div>'
+                        f'<div class="msg-bubble assistant">{content}</div>'
+                        f'<div class="msg-time">{time_str}</div>'
+                        '</div></div>'
+                    )
+            msgs_html += '<div id="chat-bottom"></div></div>'
+            msgs_html += (
+                '<script>'
+                'var el=document.getElementById("chat-bottom");'
+                'if(el)el.scrollIntoView({behavior:"smooth"});'
+                '</script>'
+            )
+            st.markdown(msgs_html, unsafe_allow_html=True)
+        else:
+            st.caption("在下方输入问题开始对话")
 
-        if get_history_count() > 0:
-            st.caption(f"对话记录: {get_history_count()} 条")
+    user_input = st.text_input(
+        "输入问题...",
+        key="ai_input",
+        placeholder="问我任何关于设备借用的问题",
+    )
 
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        send_clicked = st.button("发送 ➤", use_container_width=True)
+    with col2:
+        if st.button("清空", use_container_width=True):
+            clear_chat_history()
+            st.rerun()
+
+    if send_clicked and user_input:
+        add_message("user", user_input)
+        maybe_summarize()
+
+        try:
+            client = get_ai_client()
+            messages = get_conversation_history(max_turns=20)
+            with st.spinner("AI 思考中..."):
+                response = client.chat(
+                    messages=messages,
+                    model=CLOUDFLARE_MODEL_CHAT,
+                    max_tokens=512,
+                )
+            add_message("assistant", response)
+            st.rerun()
+        except ValueError as e:
+            st.error(f"请先配置 API Key: {e}")
+            logger.error(f"AI Chat API Key: {e}")
+        except Exception as e:
+            st.error(f"请求失败: {e}")
+            logger.error(f"AI Chat request failed: {e}")
+            add_message("assistant", "抱歉，AI 服务暂时不可用，请稍后重试。")
+            st.rerun()
+
+    if get_history_count() > 0:
+        st.caption(f"对话记录: {get_history_count()} 条")
 
 # ══════════════════════════════════════════════════════
 # HEADER + GLOBAL DATE RANGE
@@ -1039,14 +1131,12 @@ _e = _end   or None
 st.markdown("<hr style='border:none;border-top:1px solid #131313;margin:5px 0 0 0'>",
             unsafe_allow_html=True)
 
-
 # ══════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════
 tab_ov, tab_fleet, tab_cat, tab_item, tab_pat = st.tabs([
     "Overview", "Fleet Health", "Category", "Single Item", "Patterns"
 ])
-
 
 # ── OVERVIEW ─────────────────────────────────────────
 with tab_ov:
@@ -1079,7 +1169,6 @@ with tab_ov:
         f"Top categories: {json.dumps(sorted(ov['categories'],key=lambda x:-x['count'])[:5])}. "
         f"Monthly trend last 6m: {json.dumps(ov['monthly'][-6:])}. "
         "3-4 insights, plain text, no bullets, 120 words max.", key="ov")
-
 
 # ── FLEET HEALTH ─────────────────────────────────────
 with tab_fleet:
@@ -1128,7 +1217,6 @@ with tab_fleet:
         f"Total items analyzed: {len(fh['quadrant'])}. "
         "Procurement needs, underused items. Plain text, 120 words max.", key="fleet")
 
-
 # ── CATEGORY ─────────────────────────────────────────
 with tab_cat:
     cc1, _ = st.columns([2, 5])
@@ -1168,7 +1256,6 @@ with tab_cat:
         f"Category: {sel_cat}. Top items: {json.dumps(cat_d['items'][:8])}. "
         f"Active: {active_n}/{n_items}. "
         "Demand patterns, popular items, fleet adequacy. Plain text, 120 words max.", key="cat")
-
 
 # ── SINGLE ITEM ──────────────────────────────────────
 with tab_item:
@@ -1253,7 +1340,6 @@ with tab_item:
             "<p style='color:#1e1e1e;text-align:center;margin-top:60px;font-size:13px'>"
             "select category → search → pick item</p>",
             unsafe_allow_html=True)
-
 
 # ── PATTERNS ─────────────────────────────────────────
 with tab_pat:
