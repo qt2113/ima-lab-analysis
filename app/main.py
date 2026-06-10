@@ -75,8 +75,9 @@ def _cached_patterns(category, source, start, end):
 
 def initialize_data():
     """页面加载时自动初始化/刷新数据"""
+    import traceback as _traceback
     db = DatabaseManager()
-    
+
     has_historical = False
     has_realtime = False
     try:
@@ -85,7 +86,7 @@ def initialize_data():
         has_realtime = stats.get('by_source', {}).get('realtime', 0) > 0
     except Exception:
         pass
-    
+
     if not has_historical:
         try:
             from data.loaders.historical_loader import load_historical_data
@@ -93,9 +94,10 @@ def initialize_data():
             if not df_historical.empty:
                 db.insert_data(df_historical, source='historical', replace=True)
                 st.cache_data.clear()
-        except Exception:
-            pass
-    
+        except Exception as e:
+            logger.error(f"Historical data load failed: {e}\n{_traceback.format_exc()}")
+            st.warning(f"历史数据加载失败: {e}")
+
     if not has_realtime:
         try:
             from data.loaders.realtime_loader import load_realtime_data
@@ -103,8 +105,9 @@ def initialize_data():
             if not df_realtime.empty:
                 db.insert_data(df_realtime, source='realtime', replace=True)
                 st.cache_data.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Realtime data load failed: {e}\n{_traceback.format_exc()}")
+            st.warning(f"实时数据加载失败: {e}")
 
 if not st.session_state.get('_data_initialized'):
     initialize_data()
