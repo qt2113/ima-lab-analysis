@@ -13,16 +13,31 @@ except ImportError:
 
 
 def _get_secret(key: str, default: str = "") -> str:
+    import sys
     try:
         import streamlit as st
+        # Dump available keys (one-time, only values masked) for Cloud debugging
+        if not hasattr(_get_secret, "_dumped"):
+            _get_secret._dumped = True
+            top_keys = list(st.secrets.keys()) if hasattr(st.secrets, 'keys') else []
+            nested_info = {}
+            for sk in top_keys:
+                if isinstance(st.secrets[sk], dict):
+                    nested_info[sk] = list(st.secrets[sk].keys())
+            dbg = f"[SECRETS] top-level keys: {top_keys} | nested: {nested_info}"
+            logger.info(dbg)
+            print(dbg, file=sys.stderr, flush=True)
+
         if key in st.secrets:
             return st.secrets[key]
         # Search common nested sections (legacy configs often put everything under gcp_service_account)
         for section in ("custom_sheet", "gcp_service_account"):
             if section in st.secrets and isinstance(st.secrets[section], dict) and key in st.secrets[section]:
                 return st.secrets[section][key]
-    except (KeyError, AttributeError):
-        logger.debug(f"Secret '{key}' not found in Streamlit secrets")
+        logger.warning(f"Secret '{key}' not found in available keys: {list(st.secrets.keys())}")
+    except Exception as e:
+        logger.error(f"Secret access error for '{key}': {e}")
+        print(f"[SECRETS ERROR] {key}: {e}", file=sys.stderr, flush=True)
     return default
 
 
