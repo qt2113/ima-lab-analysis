@@ -17,8 +17,10 @@ def _get_secret(key: str, default: str = "") -> str:
         import streamlit as st
         if key in st.secrets:
             return st.secrets[key]
-        if "custom_sheet" in st.secrets and key in st.secrets["custom_sheet"]:
-            return st.secrets["custom_sheet"][key]
+        # Search common nested sections (legacy configs often put everything under gcp_service_account)
+        for section in ("custom_sheet", "gcp_service_account"):
+            if section in st.secrets and isinstance(st.secrets[section], dict) and key in st.secrets[section]:
+                return st.secrets[section][key]
     except (KeyError, AttributeError):
         logger.debug(f"Secret '{key}' not found in Streamlit secrets")
     return default
