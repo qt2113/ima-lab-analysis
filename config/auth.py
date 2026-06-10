@@ -3,8 +3,11 @@ Google API 认证配置 - 安全管理Google凭据
 """
 import streamlit as st
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class GoogleAuthConfig:
     """统一的Google认证管理"""
@@ -19,9 +22,9 @@ class GoogleAuthConfig:
         try:
             if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
                 return dict(st.secrets['gcp_service_account'])
-        except Exception:
-            pass
-        
+        except (KeyError, AttributeError, TypeError):
+            logger.debug("Streamlit secrets not available")
+
         # 2. 尝试从本地secrets.toml读取（开发环境）
         try:
             secrets_file = Path('.streamlit/secrets.toml')
@@ -30,17 +33,17 @@ class GoogleAuthConfig:
                 secrets = toml.load(secrets_file)
                 if 'gcp_service_account' in secrets:
                     return secrets['gcp_service_account']
-        except Exception:
-            pass
-        
+        except (ImportError, OSError, ValueError, KeyError):
+            logger.debug("Local secrets.toml not available")
+
         # 3. 尝试从JSON文件读取（传统方式，不推荐）
         try:
             json_file = Path('service-account-key.json')
             if json_file.exists():
                 with open(json_file) as f:
                     return json.load(f)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError):
+            logger.debug("Service account JSON file not available")
         
         raise ValueError(
             "❌ 未找到Google Service Account凭据！\n"

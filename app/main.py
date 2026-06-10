@@ -33,7 +33,7 @@ import analyzer
 from config.settings import DATABASE_PATH
 from data.database import DatabaseManager, db
 from ai.client import get_ai_client
-from ai.chat import init_chat_state, add_message, get_conversation_history, clear_chat_history, get_history_count, set_system_context, maybe_summarize
+from ai.chat import init_chat_state, add_message, get_conversation_history, clear_chat_history, get_history_count, set_system_context, maybe_summarize, build_data_context
 from ai.prompts import QUICK_QUESTIONS
 from config.settings import CLOUDFLARE_MODEL_CHAT, CLOUDFLARE_MODEL_ANALYSIS, AI_PROVIDER
 
@@ -894,99 +894,6 @@ with st.sidebar:
     except Exception:
         pass
 
-    st.markdown("---")
-
-    with st.expander("💬 快捷问题", expanded=False):
-        cols = st.columns(2)
-        for i, q in enumerate(QUICK_QUESTIONS[:4]):
-            with cols[i % 2]:
-                if st.button(q, key=f"q_{i}", use_container_width=True):
-                    st.session_state.ai_input = q
-
-    st.markdown("---")
-
-    chat_container = st.container()
-    with chat_container:
-        messages = [m for m in st.session_state.get("chat_messages", [])[1:]
-                   if m["role"] in ("user", "assistant")]
-        if messages:
-            msgs_html = '<div class="chat-messages" id="chat-scroll">'
-            for msg in messages[-30:]:
-                role = msg["role"]
-                content = msg["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-                time_str = msg.get("time", "")
-                if role == "user":
-                    msgs_html += (
-                        '<div class="msg-row user">'
-                        '<div class="msg-avatar user">我</div>'
-                        '<div class="msg-body">'
-                        f'<div class="msg-name">你</div>'
-                        f'<div class="msg-bubble user">{content}</div>'
-                        f'<div class="msg-time">{time_str}</div>'
-                        '</div></div>'
-                    )
-                else:
-                    msgs_html += (
-                        '<div class="msg-row assistant">'
-                        '<div class="msg-avatar assistant">AI</div>'
-                        '<div class="msg-body">'
-                        f'<div class="msg-name">IMA AI</div>'
-                        f'<div class="msg-bubble assistant">{content}</div>'
-                        f'<div class="msg-time">{time_str}</div>'
-                        '</div></div>'
-                    )
-            msgs_html += '<div id="chat-bottom"></div></div>'
-            msgs_html += (
-                '<script>'
-                'var el=document.getElementById("chat-bottom");'
-                'if(el)el.scrollIntoView({behavior:"smooth"});'
-                '</script>'
-            )
-            st.markdown(msgs_html, unsafe_allow_html=True)
-        else:
-            st.caption("在下方输入问题开始对话")
-
-    user_input = st.text_input(
-        "输入问题...",
-        key="ai_input",
-        placeholder="问我任何关于设备借用的问题",
-    )
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        send_clicked = st.button("发送 ➤", use_container_width=True)
-    with col2:
-        if st.button("清空", use_container_width=True):
-            clear_chat_history()
-            st.rerun()
-
-    if send_clicked and user_input:
-        add_message("user", user_input)
-        maybe_summarize()
-
-        try:
-            client = get_ai_client()
-            messages = get_conversation_history(max_turns=20)
-            with st.spinner("AI 思考中..."):
-                response = client.chat(
-                    messages=messages,
-                    model=CLOUDFLARE_MODEL_CHAT,
-                    max_tokens=512,
-                )
-            add_message("assistant", response)
-            st.rerun()
-        except ValueError as e:
-            st.error(f"请先配置 API Key: {e}")
-            logger.error(f"AI Chat API Key: {e}")
-        except Exception as e:
-            st.error(f"请求失败: {e}")
-            logger.error(f"AI Chat request failed: {e}")
-            add_message("assistant", "抱歉，AI 服务暂时不可用，请稍后重试。")
-            st.rerun()
-
-    if get_history_count() > 0:
-        st.caption(f"对话记录: {get_history_count()} 条")
-
 # ══════════════════════════════════════════════════════
 # HEADER + GLOBAL DATE RANGE
 # ══════════════════════════════════════════════════════
@@ -1367,3 +1274,145 @@ with tab_pat:
         f"By month: {json.dumps(tp['by_month'])}. "
         f"Peak times: {json.dumps(sorted(tp['heatmap'],key=lambda x:-x['count'])[:5])}. "
         "Peak hours, seasonal trends, operational tips. Plain text, 120 words max.", key="pat")
+
+
+# ══════════════════════════════════════════════════════
+# FLOATING AI CHAT (via st.popover)
+# ══════════════════════════════════════════════════════
+init_chat_state()
+
+# CSS for floating popover button
+st.markdown("""
+<style>
+/* Floating popover button container */
+[data-testid="stPopover"] {
+    position: fixed !important;
+    bottom: 20px !important;
+    right: 20px !important;
+    z-index: 99999 !important;
+}
+/* The actual button */
+[data-testid="stPopover"] button {
+    width: 54px !important; height: 54px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #1a2e1a, #0d140d) !important;
+    border: 2px solid #2a3a2a !important;
+    padding: 0 !important; min-width: 0 !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+    font-size: 26px !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,.5) !important;
+    transition: transform .2s, box-shadow .2s, border-color .2s !important;
+}
+[data-testid="stPopover"] button:hover {
+    transform: scale(1.08) !important;
+    box-shadow: 0 6px 28px rgba(0,0,0,.6) !important;
+    border-color: #e2ff5d !important;
+}
+/* Popover panel */
+[data-testid="stPopover"] [data-testid="stPopoverBody"] {
+    width: 360px !important; max-height: 560px !important;
+    background: #0c0c0c !important;
+    border: 1px solid #1a1a1a !important;
+    border-radius: 14px !important;
+    box-shadow: 0 8px 40px rgba(0,0,0,.55) !important;
+    overflow-y: auto !important;
+    padding: 0 !important;
+}
+[data-testid="stPopover"] [data-testid="stPopoverBody"]::-webkit-scrollbar { width: 3px; }
+[data-testid="stPopover"] [data-testid="stPopoverBody"]::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+/* Hide popover arrow */
+[data-testid="stPopover"] [data-testid="stPopoverArrow"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# Popover chat
+with st.popover("🤖", use_container_width=False, help="AI 助手"):
+    st.markdown("**💬 IMA AI 助手**")
+
+    # Quick questions
+    st.markdown('<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">', unsafe_allow_html=True)
+    qs = [
+        ("🔥 热门", "这学期最受欢迎的设备是什么？"),
+        ("💡 采购", "给出采购建议"),
+        ("⚠️ 异常", "有哪些异常借用情况？"),
+        ("💤 闲置", "哪些设备长期无人使用？"),
+    ]
+    qcols = st.columns(4)
+    for i, (label, val) in enumerate(qs):
+        with qcols[i]:
+            if st.button(label, key=f"pq_{i}", use_container_width=True):
+                st.session_state.ai_input = val
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Messages
+    _msgs = [m for m in st.session_state.get("chat_messages", [])[1:]
+             if m["role"] in ("user", "assistant")]
+    if _msgs:
+        _html = '<div style="max-height:300px;overflow-y:auto;padding:4px 8px">'
+        for _m in _msgs[-20:]:
+            _role = _m["role"]
+            _txt = _m["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            _t = _m.get("time", "")
+            if _role == "user":
+                _html += '<div style="display:flex;flex-direction:row-reverse;margin-bottom:10px;align-items:flex-end;gap:6px"><div style="width:24px;height:24px;border-radius:50%;background:#1a2e1a;color:#4ade80;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">我</div><div style="max-width:76%"><div style="font-size:9px;color:#444;margin-bottom:2px;text-align:right">你</div><div style="padding:8px 11px;border-radius:14px;border-bottom-right-radius:3px;background:#1a2e1a;color:#b0c8b0;font-size:11px;line-height:1.5;word-break:break-word">' + _txt + '</div><div style="font-size:8px;color:#2a2a2a;margin-top:2px;text-align:right">' + _t + '</div></div></div>'
+            else:
+                _html += '<div style="display:flex;margin-bottom:10px;align-items:flex-end;gap:6px"><div style="width:24px;height:24px;border-radius:50%;background:#1a1a28;color:#60a5fa;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">AI</div><div style="max-width:76%"><div style="font-size:9px;color:#444;margin-bottom:2px">IMA AI</div><div style="padding:8px 11px;border-radius:14px;border-bottom-left-radius:3px;background:#1a1a28;color:#aab0c0;font-size:11px;line-height:1.5;word-break:break-word">' + _txt + '</div><div style="font-size:8px;color:#2a2a2a;margin-top:2px">' + _t + '</div></div></div>'
+        _html += '<div id="popover-bottom"></div></div>'
+        _html += '<script>var pb=document.getElementById("popover-bottom");if(pb)pb.scrollIntoView({behavior:"smooth",block:"end"});</script>'
+        st.markdown(_html, unsafe_allow_html=True)
+    else:
+        st.caption("在下方输入问题开始对话")
+
+    st.markdown("---")
+
+    # Input
+    col_a, col_b = st.columns([5, 1])
+    with col_a:
+        user_input = st.text_input(
+            "输入问题",
+            key="ai_input",
+            label_visibility="collapsed",
+            placeholder="问我任何关于设备借用的问题...",
+        )
+    with col_b:
+        send_clicked = st.button("➤", key="pop_send", use_container_width=True)
+
+    if st.button("🗑 清空对话", key="pop_clear"):
+        clear_chat_history()
+        st.rerun()
+
+    if get_history_count() > 0:
+        st.caption(f"对话记录: {get_history_count()} 条")
+
+    if send_clicked and user_input:
+        add_message("user", user_input)
+        maybe_summarize()
+        try:
+            from ai.client import get_ai_client
+            client = get_ai_client()
+            msgs = get_conversation_history(max_turns=20)
+
+            # 意图分类 → 定向查询数据库 → 注入数据上下文
+            data_ctx = build_data_context(user_input)
+            if data_ctx:
+                msgs.insert(0, {
+                    "role": "system",
+                    "content": (
+                        "以下是针对用户问题查询到的数据库数据。"
+                        "请基于这些数据用中文回答，引用具体的设备名称和数字。"
+                        "如果数据不足以回答，说明原因并给出建议。\n\n" + data_ctx
+                    ),
+                })
+
+            with st.spinner("AI 思考中..."):
+                resp = client.chat(messages=msgs, model=CLOUDFLARE_MODEL_ANALYSIS, max_tokens=800)
+            add_message("assistant", resp)
+            st.rerun()
+        except ValueError as e:
+            st.error(f"API Key: {e}")
+        except Exception as e:
+            st.error(f"请求失败: {e}")
+            add_message("assistant", "AI 服务暂时不可用，请稍后重试。")
+            st.rerun()

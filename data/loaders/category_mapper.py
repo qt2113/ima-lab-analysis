@@ -1,12 +1,15 @@
 """
 类别映射加载器 - 负责加载Code到Category的映射关系
 """
+import logging
 import pandas as pd
 import re
 from pathlib import Path
 from typing import Dict
 
 from config.settings import CODE_CATEGORY_MAP_FILE
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryMapper:
@@ -48,8 +51,8 @@ class CategoryMapper:
         if 'Name' in df.columns:
             self._load_name_mapping(df)
         
-        print(f"✅ 已加载 {len(self._code_map)} 条Code映射")
-        print(f"✅ 已加载 {len(self._name_map)} 条Name映射")
+        logger.info(f"Loaded {len(self._code_map)} code mappings")
+        logger.info(f"Loaded {len(self._name_map)} name mappings")
     
     def _load_code_mapping(self, df: pd.DataFrame):
         """加载Code到Category的映射"""

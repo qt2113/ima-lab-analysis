@@ -1,30 +1,33 @@
 import sqlite3
+import logging
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
     item = "Sony A7 III With EF 24-105 017"
     conn = sqlite3.connect("item_analysis.db")
     try:
-        print("exact counts:")
+        logger.info("exact counts:")
         for src in ["historical", "realtime"]:
             c = conn.execute(
                 'select count(*) from unified_records where source=? and "item name(with num)"=?',
                 (src, item),
             ).fetchone()[0]
-            print(src, c)
+            logger.info(f"  {src}: {c}")
 
-        print("\nexample rows (any source):")
+        logger.info("example rows (any source):")
         rows = conn.execute(
             'select "Start", "finished", source, "item name(with num)" '
             'from unified_records where "item name(with num)"=? order by "Start" limit 8',
             (item,),
         ).fetchall()
         for r in rows:
-            print(r)
+            logger.info(str(r))
 
-        print("\nLIKE candidates (sony a7):")
+        logger.info("LIKE candidates (sony a7):")
         df = pd.read_sql(
             "select \"item name(with num)\" as n, source, count(*) c, "
             "min(\"Start\") mn, max(\"Start\") mx "
@@ -36,9 +39,9 @@ def main() -> None:
             "limit 30",
             conn,
         )
-        print(df.to_string(index=False))
+        logger.info(df.to_string(index=False))
 
-        print("\nPotential same-model variants (a7 + 24-105):")
+        logger.info("Potential same-model variants (a7 + 24-105):")
         df2 = pd.read_sql(
             "select \"item name(with num)\" as n, source, count(*) c, "
             "min(\"Start\") mn, max(\"Start\") mx "
@@ -50,11 +53,11 @@ def main() -> None:
             "limit 30",
             conn,
         )
-        print(df2.to_string(index=False))
+        logger.info(df2.to_string(index=False))
     finally:
         conn.close()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     main()
-

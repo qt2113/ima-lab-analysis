@@ -1,12 +1,15 @@
 """
 历史数据加载器 - 从Excel文件加载历史借用记录
 """
+import logging
 import pandas as pd
 import re
 from pathlib import Path
 
 from config.settings import HISTORICAL_DATA_FILES
 from data.loaders.category_mapper import mapper
+
+logger = logging.getLogger(__name__)
 
 
 class HistoricalDataLoader:
@@ -48,10 +51,10 @@ class HistoricalDataLoader:
             file_path = Path(file_path.strip())
             
             if not file_path.exists():
-                print(f"⚠️ 跳过不存在的文件: {file_path}")
+                logger.warning(f"Skipping missing file: {file_path}")
                 continue
             
-            print(f"📂 正在加载历史数据: {file_path}")
+            logger.info(f"Loading historical data: {file_path}")
             
             df = pd.read_excel(file_path, engine='openpyxl')
             
@@ -74,14 +77,14 @@ class HistoricalDataLoader:
                 )
             
             all_dfs.append(df)
-            print(f"✅ 成功加载 {len(df)} 条记录 from {file_path.name}")
+            logger.info(f"Loaded {len(df)} records from {file_path.name}")
         
         if not all_dfs:
             raise FileNotFoundError("❌ 没有找到任何历史数据文件")
         
         result_df = pd.concat(all_dfs, ignore_index=True)
         result_df = result_df.drop_duplicates(subset=['Start', 'item name(with num)'], keep='first')
-        print(f"✅ 共加载 {len(result_df)} 条历史记录（去重后）")
+        logger.info(f"Total historical records loaded: {len(result_df)} (deduplicated)")
         
         return result_df
 

@@ -8,14 +8,27 @@ KEY FIXES:
 - gantt domain: excludes NULL-finished (active) items from x-axis max
   → previously active items stretched x-axis to "now", compressing old bars to invisible
 """
-import sqlite3, json, math
+import sqlite3, json, math, logging
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import re
 
-_DB = Path(__file__).parent / "item_analysis.db"
+logger = logging.getLogger(__name__)
+
+from config.settings import DATABASE_PATH as _DEFAULT_DB
 _BUNDLE_RE = r'^\d+\s'
+
+
+def _get_connection(db_connection=None):
+    """Return (connection, should_close). Uses param → DatabaseManager → default path fallback."""
+    if db_connection is not None:
+        return db_connection, False
+    try:
+        from data.database import db
+        return db.connection, False
+    except (ImportError, AttributeError, sqlite3.Error):
+        logger.debug("DatabaseManager unavailable, using direct SQLite connection")
+        return sqlite3.connect(str(_DEFAULT_DB)), True
 
 def _strip_number(name: str) -> str:
     if name is None:
@@ -23,14 +36,8 @@ def _strip_number(name: str) -> str:
     return re.sub(r"\s+\d+$", "", str(name)).strip()
 
 
-def _load(category=None, source=None, start=None, end=None) -> pd.DataFrame:
-    try:
-        from data.database import db as _singleton
-        conn = _singleton.connection
-        close_after = False
-    except Exception:
-        conn = sqlite3.connect(str(_DB))
-        close_after = True
+def _load(category=None, source=None, start=None, end=None, db_connection=None) -> pd.DataFrame:
+    conn, close_after = _get_connection(db_connection)
 
     conds, params = [], []
     if source:   conds.append("source = ?");      params.append(source)
@@ -73,8 +80,8 @@ def _j(data) -> str:
 
 
 # ── 1. OVERVIEW ──────────────────────────────────────
-def overview(source=None, start=None, end=None) -> str:
-    df = _load(source=source, start=start, end=end)
+def overview(source=None, start=None, end=None, db_connection=None) -> str:
+    df = _load(source=source, start=start, end=end, db_connection=db_connection)
     pos = df[df['duration_h'] > 0]
     kpi = {
         "total":        int(len(df)),
@@ -95,8 +102,8 @@ def overview(source=None, start=None, end=None) -> str:
 
 
 # ── 2. FLEET HEALTH ──────────────────────────────────
-def fleet_health(category=None, source=None, start=None, end=None, top_n=25) -> str:
-    df = _load(category=category, source=source, start=start, end=end)
+def fleet_health(category=None, source=None, start=None, end=None, top_n=25, db_connection=None) -> str:
+    df = _load(category=category, source=source, start=start, end=end, db_connection=db_connection)
     # Remove bundles
     df = df[~df['item name(with num)'].str.match(_BUNDLE_RE, na=False)]
     if df.empty:
@@ -160,8 +167,8 @@ def fleet_health(category=None, source=None, start=None, end=None, top_n=25) -> 
 
 
 # ── 3. CATEGORY DEEP DIVE ────────────────────────────
-def category_analysis(category: str, source=None, start=None, end=None) -> str:
-    df = _load(category=category, source=source, start=start, end=end)
+def category_analysis(category: str, source=None, start=None, end=None, db_connection=None) -> str:
+    df = _load(category=category, source=source, start=start, end=end, db_connection=db_connection)
     if df.empty:
         return _j({"items": [], "timeline": [], "monthly": [], "top10": []})
 
@@ -200,8 +207,8 @@ def category_analysis(category: str, source=None, start=None, end=None) -> str:
 
 
 # ── 4. SINGLE ITEM DETAIL ────────────────────────────
-def item_detail(item: str, start=None, end=None, match_base: bool = False) -> str:
-    df = _load(start=start, end=end)
+def item_detail(item: str, start=None, end=None, match_base: bool = False, db_connection=None) -> str:
+    df = _load(start=start, end=end, db_connection=db_connection)
     if match_base:
         base = _strip_number(item)
         df = df[df["item name(with num)"].apply(_strip_number) == base]
@@ -260,8 +267,8 @@ def item_detail(item: str, start=None, end=None, match_base: bool = False) -> st
 
 
 # ── 5. TEMPORAL PATTERNS ─────────────────────────────
-def temporal_patterns(category=None, source=None, start=None, end=None) -> str:
-    df = _load(category=category, source=source, start=start, end=end)
+def temporal_patterns(category=None, source=None, start=None, end=None, db_connection=None) -> str:
+    df = _load(category=category, source=source, start=start, end=end, db_connection=db_connection)
     if df.empty:
         return _j({"heatmap": [], "by_month": [], "by_weekday": []})
 
@@ -281,18 +288,19 @@ def temporal_patterns(category=None, source=None, start=None, end=None) -> str:
 
 
 # ── UI HELPERS ────────────────────────────────────────
-def get_categories() -> list:
-    conn = sqlite3.connect(str(_DB))
+def get_categories(db_connection=None) -> list:
+    conn, close_after = _get_connection(db_connection)
     df = pd.read_sql(
         'SELECT "Category", COUNT(*) c FROM unified_records '
         "WHERE \"Category\" NOT IN ('nan','Unknown','') "
         'GROUP BY "Category" ORDER BY c DESC', conn)
-    conn.close()
+    if close_after:
+        conn.close()
     return [r for r in df['Category'].tolist() if r and str(r) != 'nan']
 
 
-def get_items(category=None, source=None) -> list:
-    conn = sqlite3.connect(str(_DB))
+def get_items(category=None, source=None, db_connection=None) -> list:
+    conn, close_after = _get_connection(db_connection)
     conds, params = [], []
     if category: conds.append('"Category"=?'); params.append(category)
     if source:   conds.append('"source"=?');   params.append(source)
@@ -300,13 +308,14 @@ def get_items(category=None, source=None) -> list:
     df = pd.read_sql(
         f'SELECT DISTINCT "item name(with num)" n FROM unified_records {where} ORDER BY n',
         conn, params=params)
-    conn.close()
+    if close_after:
+        conn.close()
     return df['n'].dropna().tolist()
 
 
-def get_bounds(source=None) -> dict:
+def get_bounds(source=None, db_connection=None) -> dict:
     try:
-        conn = sqlite3.connect(str(_DB))
+        conn, close_after = _get_connection(db_connection)
         if source:
             row = pd.read_sql(
                 'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records WHERE source=?',
@@ -314,10 +323,12 @@ def get_bounds(source=None) -> dict:
         else:
             row = pd.read_sql(
                 'SELECT MIN("Start") mn, MAX("Start") mx FROM unified_records', conn)
-        conn.close()
+        if close_after:
+            conn.close()
         mn = pd.to_datetime(row['mn'][0], errors='coerce') if not row.empty else pd.NaT
         mx = pd.to_datetime(row['mx'][0], errors='coerce') if not row.empty else pd.NaT
         return {'min': mn.strftime('%Y-%m-%d') if pd.notna(mn) else '',
                 'max': mx.strftime('%Y-%m-%d') if pd.notna(mx) else ''}
-    except Exception:
+    except (sqlite3.Error, pd.errors.DatabaseError):
+        logger.warning("Failed to query date bounds, returning empty range")
         return {'min': '', 'max': ''}

@@ -1,6 +1,9 @@
 import os
 import json
+import logging
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import groq
@@ -16,8 +19,8 @@ def _get_secret(key: str, default: str = "") -> str:
             return st.secrets[key]
         if "custom_sheet" in st.secrets and key in st.secrets["custom_sheet"]:
             return st.secrets["custom_sheet"][key]
-    except Exception:
-        pass
+    except (KeyError, AttributeError):
+        logger.debug(f"Secret '{key}' not found in Streamlit secrets")
     return default
 
 

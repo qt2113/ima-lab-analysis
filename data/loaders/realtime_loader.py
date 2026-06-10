@@ -1,6 +1,7 @@
 """
 Realtime data loader - fetches borrow records from Google Sheets.
 """
+import logging
 import pandas as pd
 import re
 import gspread
@@ -10,6 +11,8 @@ from config.settings import GOOGLE_SHEET_ID, TARGET_SHEETS
 from config.auth import GoogleAuthConfig
 from config.sheet_config import get_effective_sheet_id, get_effective_sheet_names
 from data.loaders.category_mapper import mapper
+
+logger = logging.getLogger(__name__)
 
 
 class RealtimeDataLoader:
@@ -51,17 +54,17 @@ class RealtimeDataLoader:
                     break
 
             if not target_sheet:
-                print(f"[warn] Sheet not found: {sheet_name}")
+                logger.warning(f"Sheet not found: {sheet_name}")
                 return pd.DataFrame()
 
             data = target_sheet.get_all_records()
             df = pd.DataFrame(data)
             df["sheet_source"] = sheet_name
 
-            print(f"[ok] Fetched {len(df)} rows from {sheet_name}")
+            logger.info(f"Fetched {len(df)} rows from {sheet_name}")
             return df
-        except Exception as e:
-            print(f"[error] Fetch {sheet_name} failed: {e}")
+        except (gspread.exceptions.GSpreadException, OSError, ValueError) as e:
+            logger.error(f"Fetch {sheet_name} failed: {e}")
             return pd.DataFrame()
 
     def _clean_columns(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -160,7 +163,7 @@ class RealtimeDataLoader:
         if sheet_names is None:
             sheet_names = self.sheet_names
 
-        print("[info] Start fetching realtime data from Google Sheets...")
+        logger.info("Start fetching realtime data from Google Sheets")
 
         all_data = []
         for sheet_name in sheet_names:
@@ -169,11 +172,11 @@ class RealtimeDataLoader:
                 all_data.append(df_sheet)
 
         if not all_data:
-            print("[warn] No data fetched from sheets")
+            logger.warning("No data fetched from sheets")
             return pd.DataFrame()
 
         df_raw = pd.concat(all_data, ignore_index=True)
-        print(f"[info] Total raw rows: {len(df_raw)}")
+        logger.info(f"Total raw rows: {len(df_raw)}")
 
         df_raw = self._clean_columns(df_raw)
         df_raw = self._validate_data(df_raw)
@@ -187,7 +190,7 @@ class RealtimeDataLoader:
         )
 
         if df_unified.empty:
-            print("[warn] No valid borrow records produced")
+            logger.warning("No valid borrow records produced")
             return pd.DataFrame()
 
         df_unified["item name"] = df_unified["item name(with num)"].apply(self._strip_number)
@@ -199,7 +202,7 @@ class RealtimeDataLoader:
                 .astype("Int64")
             )
 
-        print(f"[ok] Unified borrow records: {len(df_unified)}")
+        logger.info(f"Unified borrow records: {len(df_unified)}")
         return df_unified
 
 

@@ -1,8 +1,11 @@
 """Google Sheet 动态配置管理"""
 import os
+import logging
 import toml
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 CONFIG_FILE = Path("/tmp/ima_lab_sheet_config.toml")
 
@@ -25,8 +28,8 @@ def save_sheet_config(sheet_id: str, sheet_names: List[str]):
     if CONFIG_FILE.exists():
         try:
             config = toml.load(CONFIG_FILE)
-        except Exception:
-            pass
+        except (OSError, toml.TomlDecodeError):
+            logger.debug("Failed to parse sheet config, using defaults")
     
     config['custom_sheet'] = {
         'sheet_id': sheet_id,
@@ -57,5 +60,5 @@ def clear_sheet_config():
                 del config['custom_sheet']
                 with open(CONFIG_FILE, 'w') as f:
                     toml.dump(config, f)
-        except Exception:
-            pass
+        except (OSError, toml.TomlDecodeError):
+            logger.debug("Failed to clear sheet config")

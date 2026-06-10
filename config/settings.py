@@ -2,7 +2,38 @@
 项目配置文件 - 统一管理所有配置项
 """
 import os
+import logging
+import sys
 from pathlib import Path
+
+# ── Logging ────────────────────────────────────────────
+LOG_FILE = Path(__file__).parent.parent / "app.log"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def setup_logging():
+    """Configure root logger — call once at app startup."""
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+    # Avoid duplicate handlers on Streamlit rerun
+    if root.handlers:
+        return
+
+    fmt = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
+
+    try:
+        fh = logging.FileHandler(str(LOG_FILE))
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    except OSError:
+        pass  # read-only filesystem — stderr output only
 
 # ==================== 路径配置 ====================
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -10,9 +41,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 DATABASE_PATH = PROJECT_ROOT / "item_analysis.db" if os.access(str(PROJECT_ROOT), os.W_OK) else Path(os.environ.get("TMPDIR", "/tmp")) / "item_analysis.db"
 
 # ==================== Google Sheets 配置 ====================
-#GOOGLE_SHEET_ID = "1gMibpWSaxtfPyTq4FJ8wqdpE0ZMrWgEhmP-ReApwg-4"
-#GOOGLE_SHEET_ID = "1odR-dpvkPfPuCH5Qh0YGbgREgi-a75uR3NSnUjtkDlo"
-GOOGLE_SHEET_ID = "1MLpgJggmnWTlD301bcnletyt9sKlAzJQoshqn7v2fgY"
+GOOGLE_SHEET_ID = "1tV26Vx1j_EkM22LM9_XR2xUdlYc_wwDBALXnWAuvQ3Q"
+# GOOGLE_SHEET_ID = "1MLpgJggmnWTlD301bcnletyt9sKlAzJQoshqn7v2fgY"
 TARGET_SHEETS = ["Fall 2025", "Spring 2026"]  # 要抓取的Sheet名称
 
 # ==================== 数据文件配置 ====================

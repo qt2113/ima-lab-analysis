@@ -2,12 +2,15 @@
 数据库管理模块 - 统一的数据库操作接口
 """
 import sqlite3
+import logging
 import pandas as pd
 from pathlib import Path
 from typing import Optional, List
 from contextlib import contextmanager
 
 from config.settings import DATABASE_PATH, DB_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
@@ -26,8 +29,8 @@ class DatabaseManager:
             try:
                 if cls._instance._connection is not None:
                     cls._instance._connection.close()
-            except Exception:
-                pass
+            except sqlite3.Error:
+                logger.debug("Failed to close old connection on DB path switch")
             cls._instance._connection = None
 
     def __new__(cls):
@@ -49,7 +52,6 @@ class DatabaseManager:
             db_path = Path(DatabaseManager._db_path)
         else:
             # 直接用 settings.py 里已经处理好写权限的路径
-            # 这样和 analyzer._DB = DATABASE_PATH 保持同一个文件
             db_path = Path(DATABASE_PATH)
         
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +133,7 @@ class DatabaseManager:
             if_exists='append', 
             index=False
         )
-        print(f"✅ 成功插入 {len(df)} 条记录 (source={source})")
+        logger.info(f"Inserted {len(df)} records (source={source})")
     
     def query(
         self, 
@@ -194,7 +196,7 @@ class DatabaseManager:
             (source,)
         )
         self._connection.commit()
-        print(f"✅ 已清空 {source} 数据")
+        logger.info(f"Cleared {source} data")
     
     def get_statistics(self) -> dict:
         """获取数据库统计信息"""
