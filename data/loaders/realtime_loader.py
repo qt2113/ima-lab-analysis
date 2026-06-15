@@ -68,9 +68,23 @@ class RealtimeDataLoader:
             return pd.DataFrame()
 
     def _clean_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize column names — handles variations across different Google Sheets."""
+        """Normalize column names — handles variations across different Google Sheets.
+
+        Uses exact-match aliases to avoid greedy false positives like
+        "Equipment Status" being renamed to "Equipment Name".
+        """
         df.columns = [str(col).strip() for col in df.columns]
         logger.info(f"Raw columns from sheet: {list(df.columns)}")
+
+        # Exact column-name aliases (lowercased).  No substring matching.
+        _NAME_ALIASES = {
+            "equipment name", "equipment", "item name", "item",
+            "设备名称", "设备", "物品名称", "物品",
+        }
+        _TIME_ALIASES  = {"time", "date", "时间", "日期"}
+        _ACTION_ALIASES = {"action", "动作"}
+        _CODE_ALIASES   = {"code", "编码"}
+        _NETID_ALIASES  = {"netid", "net id", "用户"}
 
         column_fixes = {}
         if len(df.columns) > 0 and ("Unnamed:" in df.columns[0] or df.columns[0] == ""):
@@ -78,24 +92,29 @@ class RealtimeDataLoader:
 
         for col in df.columns:
             col_lower = col.lower()
-            if "equipment name" in col_lower or "equipment" in col_lower:
+
+            if col_lower in _NAME_ALIASES:
                 column_fixes[col] = "Equipment Name"
-            elif "item name" in col_lower or "item" in col_lower:
-                column_fixes[col] = "Equipment Name"
-            elif "name" in col_lower and "equipment" not in col_lower:
-                # Only rename if it looks like an item name column (not "NetID Name" etc.)
-                if "item" in col_lower or "设备" in col:
-                    column_fixes[col] = "Equipment Name"
-            if "time" in col_lower and "time" not in col:
+            elif col_lower in _TIME_ALIASES:
                 column_fixes[col] = "Time"
-            elif "时间" in col or "日期" in col or "date" in col_lower:
-                pass  # keep original, handled by validate step
-            if "action" in col_lower or "动作" in col:
+            elif col_lower in _ACTION_ALIASES:
                 column_fixes[col] = "Action"
-            if "code" in col_lower or "编码" in col:
+            elif col_lower in _CODE_ALIASES:
                 column_fixes[col] = "Code"
-            if "netid" in col_lower or "net id" in col_lower or "用户" in col:
+            elif col_lower in _NETID_ALIASES:
                 column_fixes[col] = "NetID"
+
+        # Guard: if two source columns map to the same target, skip both
+        target_sources = {}
+        for src, target in list(column_fixes.items()):
+            target_sources.setdefault(target, []).append(src)
+        for target, sources in target_sources.items():
+            if len(sources) > 1:
+                logger.warning(
+                    "Skipping ambiguous renames: %s → %s", sources, target
+                )
+                for src in sources:
+                    del column_fixes[src]
 
         if column_fixes:
             logger.info(f"Column renames: {column_fixes}")
