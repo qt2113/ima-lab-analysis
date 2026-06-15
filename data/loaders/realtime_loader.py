@@ -223,7 +223,7 @@ class RealtimeDataLoader:
 
         df_unified = (
             df_raw.groupby(["NetID", "Equipment Name"], group_keys=False)
-            .apply(self._process_borrow_records)
+            .apply(self._process_borrow_records, include_groups=True)
             .reset_index(drop=True)
         )
 
